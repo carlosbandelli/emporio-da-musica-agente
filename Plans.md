@@ -68,6 +68,7 @@ Destino: `docs/arquitetura.md` e `docs/premissas.md`.
    ```
    src/emporio/
    ├── modulos/                  ← MONÓLITO MODULAR (Python simples, sem I/O nem SDK)
+   │   ├── comum/                shared kernel: Dinheiro e tipos simples usados por todos os módulos
    │   ├── catalogo/             Produto, Categoria → buscar_produtos, detalhar_produto
    │   ├── comercial/            Dinheiro, Parcelamento, PlanoPagamento → simular_pagamento
    │   ├── pedidos/              Pedido, StatusPedido → consultar_pedido (com verificação)
@@ -83,13 +84,18 @@ Destino: `docs/arquitetura.md` e `docs/premissas.md`.
    │   ├── csv/, memoria/        dados e estado (Fase 1)
    │   └── db/, redis/           Postgres e Redis (Fase 2)
    └── composicao.py             ← único ponto que liga porta ↔ adapter (lê Settings/.env e MOTOR_ATENDIMENTO)
+   config/                       ← na raiz do repositório (o Dockerfile copia /app/config): tenants.yaml, tenants/<id>/politicas.md
    ```
 
    Regras de dependência (só para dentro), verificadas pelo **import-linter** (`uv run lint-imports`, no gate e no CI):
-   - C1 camadas: `composicao` → `adaptadores` → `portas` → `modulos`; nada importa camada de cima.
+   - C1 camadas (de fora para dentro): `composicao` → `adaptadores` → `modulos.*.aplicacao` → `portas` → `modulos.*.dominio`
+     (+ `modulos.comum`). Os casos de uso dependem das portas; as portas podem usar tipos do domínio; o domínio não importa
+     nada do projeto além de `modulos.comum`. Nenhuma camada importa uma camada de fora. (Corrigido em 2026-11-01: a versão
+     anterior punha `portas` acima de `modulos`, o que impedia os casos de uso de depender das portas.)
    - C2 `emporio.modulos` não importa `emporio.adaptadores`, `emporio.composicao` nem SDKs externos (`groq`, `google.genai`,
      `anthropic`, `httpx`, `sqlalchemy`, `redis`, `fastapi`, `typer`).
-   - C3 entre módulos: um módulo só importa o `aplicacao` de outro, nunca o `dominio` (contrato `forbidden` por par).
+   - C3 entre módulos: um módulo só importa o `aplicacao` de outro, nunca o `dominio` (contrato `forbidden` por módulo);
+     `modulos.comum` é permitido para todos.
    - C4 adaptadores de entrada (`cli`, `api`) só importam `portas` e `composicao`; nunca `modulos`, `llm`, `csv`, `db`, `motor`.
    - C5 adaptadores independentes entre si (contrato `independence`): `motor.nativo` não importa `llm.claude`, só a porta
      `LLMProvider`.
@@ -105,7 +111,7 @@ Destino: `docs/arquitetura.md` e `docs/premissas.md`.
 
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
-| 1.0 | `[lane:gate]` `[tdd:skip:scaffold]` `@python-pro` **Esqueleto do projeto**: `pyproject.toml` (Python 3.12, src layout `src/emporio`, entry point `emporio = "emporio.adaptadores.cli:app"`), grupos `dev` (pytest, pytest-asyncio, ruff, mypy, import-linter), `uv.lock`, configs de ruff/mypy (strict em `src`), `tests/` com 1 smoke test, `.env.example` revisado (chaves vazias, `MOTOR_ATENDIMENTO=nativo`, `DATA_REFERENCIA=`). Pastas exatamente como a árvore do Spec delta §3.3 (Fase 1: `modulos/*`, `portas/`, `adaptadores/{cli,motor/nativo,llm,csv,memoria}`, `composicao.py`, `config/`), com `__init__.py`. Contratos C1–C5 do import-linter em `pyproject.toml` (`[tool.importlinter]`) e passo `uv run lint-imports` adicionado ao job de lint do `.github/workflows/ci-cd.yml`. `.gitignore` passa a ignorar `.claude/memory/`, `.claude/sessions/`, `.claude/state/`, `var/` e a pasta local do code-review-graph (`.code-review-graph/`; confirmar o nome na primeira execução). Ao fim da task, primeiro `build_or_update_graph_tool`. | `uv sync --locked` ok; ruff check + format --check ok; `mypy src` ok; `uv run lint-imports` com 5 contratos KEPT; prova de violação: um import proibido temporário (`modulos.comercial` → `adaptadores.llm`) faz `lint-imports` falhar (registrado no commit, depois revertido); `pytest` 1 passed; `uv run emporio --help` sai com 0; `git status` não mostra `.claude/state`; CLAUDE.md atualizado com os comandos e a árvore | - | cc:TODO |
+| 1.0 | `[lane:gate]` `[tdd:skip:scaffold]` `@python-pro` **Esqueleto do projeto**: `pyproject.toml` (Python 3.12, src layout `src/emporio`, entry point `emporio = "emporio.adaptadores.cli:app"`), grupos `dev` (pytest, pytest-asyncio, ruff, mypy, import-linter), `uv.lock`, configs de ruff/mypy (strict em `src`), `tests/` com 1 smoke test, `.env.example` revisado (chaves vazias, `MOTOR_ATENDIMENTO=nativo`, `DATA_REFERENCIA=`). Pastas exatamente como a árvore do Spec delta §3.3 (Fase 1: `modulos/*`, `portas/`, `adaptadores/{cli,motor/nativo,llm,csv,memoria}`, `composicao.py`, `config/`), com `__init__.py`. Contratos C1–C5 do import-linter em `pyproject.toml` (`[tool.importlinter]`) e passo `uv run lint-imports` adicionado ao job de lint do `.github/workflows/ci-cd.yml`. `.gitignore` passa a ignorar `.claude/memory/`, `.claude/sessions/`, `.claude/state/`, `var/` e a pasta local do code-review-graph (`.code-review-graph/`; confirmar o nome na primeira execução). Ao fim da task, primeiro `build_or_update_graph_tool`. | `uv sync --locked` ok; ruff check + format --check ok; `mypy src` ok; `uv run lint-imports` com 5 contratos KEPT; prova de violação: um import proibido temporário (`modulos.comercial` → `adaptadores.llm`) faz `lint-imports` falhar (registrado no commit, depois revertido); `pytest` 1 passed; `uv run emporio --help` sai com 0; `git status` não mostra `.claude/state`; CLAUDE.md atualizado com os comandos e a árvore | - | cc:WIP |
 | 1.1 | `[lane:gate]` `[tdd:skip:docs-contract]` `@architect-reviewer` **Aplicar o Spec delta** acima em `docs/arquitetura.md` e `docs/premissas.md`. | Seções §3.2, §3.3 (com a árvore e os contratos C1–C5) e premissas #19–#21 presentes; `git diff --check` limpo; nenhuma decisão anterior contradita | 1.0 | cc:TODO |
 | 1.2 | `[lane:gate]` `[tdd:required]` `@python-pro` **Portas, TenantContext e Settings**: `Protocol`s de `MotorDeAtendimento`, `LLMProvider`, `Catalogo`, `Pedidos`, `Clientes`, `Solicitacoes`, `SessaoStore`, `RateLimiter`, `EstadoCircuito`, `Relogio`; `TenantContext` imutável (tenant_id, idioma, papel); `Settings` (pydantic-settings, lê `.env` só na composição); `config/tenants.yaml` com o tenant `emporio` (persona Sônia, contatos das premissas #1–#2, idiomas, deadline, limites); loader com validação. | Testes: tenant inexistente → erro claro; yaml inválido → erro com o campo; `TenantContext` é frozen; grep sem `global ` em `src/`; gate ok | 1.0 | cc:TODO |
 | 1.3 | `[lane:gate]` `[tdd:required]` `@python-pro` **Domínio Comercial**: `Dinheiro` (centavos `int`, `ROUND_HALF_UP`, formatação por locale com `babel`), `PrecoVigente` (promoção ativa não acumula; PIX −5% só sobre preço de tabela), `Parcelamento` (≤3x mín. R$50; 4–6x mín. R$80; 7–12x mín. R$100; sobra na 1ª parcela, premissa #17), `PlanoPagamento` (combinação só acima de R$2.000). | Testes parametrizados cobrindo: PIX sem promo; promo + PIX (sem desconto extra); vários registros de promo (produtos 93/96/99, só `is_active=1`); R$1.000 em 3x = 333,34+333,33+333,33; limite exato de cada faixa; combinação em R$2.000,00 recusada e em R$2.000,01 aceita; `R$ 1.299,00` × `R$1,299.00`; cobertura ≥ 95% em `modulos/comercial` | 1.0 | cc:TODO |
