@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from emporio.adaptadores.csv import CatalogoCsv, ClientesCsv, PedidosCsv, SolicitacoesJsonl
 from emporio.adaptadores.csv._leitura import ler_pedidos, ler_produtos
+from emporio.adaptadores.db import ErroConfiguracaoBanco, RepositoriosPostgres, criar_repositorios_postgres
 from emporio.adaptadores.llm import criar_provedores
 from emporio.adaptadores.memoria import CircuitoStoreMemoria, RateLimiterMemoria, SessaoStoreMemoria
 from emporio.adaptadores.motor.nativo import AgenteNativo
@@ -33,12 +34,15 @@ from emporio.modulos.pedidos.aplicacao import ServicoPedidos
 from emporio.modulos.politicas.aplicacao import ServicoPoliticas
 from emporio.portas import (
     Catalogo,
+    Clientes,
     DiagnosticoInfo,
     LLMProvider,
     MotorDeAtendimento,
+    Pedidos,
     RateLimiter,
     Relogio,
     SessaoStore,
+    Solicitacoes,
     Telemetria,
     TelemetriaNula,
     TenantContext,
@@ -187,6 +191,7 @@ def montar(
             relogio=relogio_app,
             dir_estado=dir_estado if dir_estado is not None else base / "var",
             envolver_catalogo=envolver_catalogo,
+            repositorios=_repositorios_postgres(settings, tenants),
         ),
         sessoes=sessoes,
         limitador=limitador,
@@ -212,26 +217,47 @@ def montar_ferramentas(
     relogio: Relogio,
     dir_estado: Path,
     envolver_catalogo: Callable[[Catalogo], Catalogo] | None = None,
+    repositorios: RepositoriosPostgres | None = None,
 ) -> FerramentasLoja:
-    """Casos de uso sobre os CSVs do tenant + solicitações em JSONL, reunidos na fachada de tools.
+    """Casos de uso sobre os dados do tenant reunidos na fachada de tools.
 
+    Dados: Postgres (schema por tenant) quando `repositorios` é dado; senão CSVs + solicitações em JSONL (modo local).
     `envolver_catalogo`: decorador opcional do catálogo (ex.: cache-aside no Redis, que nunca guarda estoque).
     """
 
     def resolver_config(tenant_id: str) -> ConfigTenant:
         return obter_tenant(tenants, tenant_id)
 
-    catalogo: Catalogo = CatalogoCsv(tenants, raiz)
+    catalogo: Catalogo
+    pedidos: Pedidos
+    clientes: Clientes
+    solicitacoes: Solicitacoes
+    if repositorios is not None:
+        catalogo, pedidos = repositorios.catalogo, repositorios.pedidos
+        clientes, solicitacoes = repositorios.clientes, repositorios.solicitacoes
+    else:
+        catalogo, pedidos = CatalogoCsv(tenants, raiz), PedidosCsv(tenants, raiz)
+        clientes, solicitacoes = ClientesCsv(tenants, raiz), SolicitacoesJsonl(dir_estado)
     if envolver_catalogo is not None:
         catalogo = envolver_catalogo(catalogo)
     politicas = ServicoPoliticas(relogio, resolver_config)
     return FerramentasLoja(
         catalogo=ServicoCatalogo(catalogo, resolver_config),
         comercial=ServicoComercial(catalogo, politicas),
-        pedidos=ServicoPedidos(PedidosCsv(tenants, raiz), ClientesCsv(tenants, raiz), catalogo, relogio, politicas),
+        pedidos=ServicoPedidos(pedidos, clientes, catalogo, relogio, politicas),
         politicas=politicas,
-        atendimento=ServicoAtendimento(SolicitacoesJsonl(dir_estado), relogio),
+        atendimento=ServicoAtendimento(solicitacoes, relogio),
     )
+
+
+def _repositorios_postgres(settings: Settings, tenants: Mapping[str, ConfigTenant]) -> RepositoriosPostgres | None:
+    """Postgres quando `DATABASE_URL` existe (Fase 2; migrar antes com `python -m emporio.adaptadores.db.migrar`)."""
+    if settings.database_url is None:
+        return None
+    try:
+        return criar_repositorios_postgres(settings, tenants)
+    except ErroConfiguracaoBanco as erro:
+        raise ErroConfiguracao(str(erro)) from erro
 
 
 def _resolver(base: Path, caminho: Path | str) -> Path:
