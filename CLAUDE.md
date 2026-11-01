@@ -4,14 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This is a technical challenge (Artefact, AI Engineer 2026). Planning is done; Phase 1 is in progress (task 1.0 scaffold in place: package tree, tooling, import-linter; no
-agent logic yet).
+This is a technical challenge (Artefact, AI Engineer 2026). Phase 1 (core) is implemented through task 1.15: agent engine, LLM
+adapters, CLI, contract and end-to-end tests, 3 recorded examples, bilingual README. Remaining: 1.16 clean-clone check,
+then Phase 2 extras.
 The brief PDF is local only (gitignored). Source of truth for decisions:
 
 - `docs/arquitetura.md`: architecture (agentic + CAG, LLM routing Groq/Gemini/Claude, modular monolith, hexagonal at
   the edges, schema-per-tenant Postgres, Redis, resilience values, Traefik, observability, RBAC, i18n, persona
   "Sônia", how the evaluator runs the project, future improvements).
-- `docs/premissas.md`: assumptions for every ambiguity (41 so far). Add new ones there.
+- `docs/premissas.md`: assumptions for every ambiguity (67 so far). Add new ones there.
 - `docs/pagamento.md` (payment port design) and `docs/deploy.md` (deploy artifacts and the metrics contract the code
   must expose). The deploy files assume module/port/env names listed there: follow them.
 
