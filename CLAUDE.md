@@ -11,7 +11,7 @@ The brief PDF is local only (gitignored). Source of truth for decisions:
 - `docs/arquitetura.md`: architecture (agentic + CAG, LLM routing Groq/Gemini/Claude, modular monolith, hexagonal at
   the edges, schema-per-tenant Postgres, Redis, resilience values, Traefik, observability, RBAC, i18n, persona
   "Sônia", how the evaluator runs the project, future improvements).
-- `docs/premissas.md`: assumptions for every ambiguity (18 so far). Add new ones there.
+- `docs/premissas.md`: assumptions for every ambiguity (36 so far). Add new ones there.
 - `docs/pagamento.md` (payment port design) and `docs/deploy.md` (deploy artifacts and the metrics contract the code
   must expose). The deploy files assume module/port/env names listed there: follow them.
 
