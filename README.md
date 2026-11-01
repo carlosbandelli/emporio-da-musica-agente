@@ -20,6 +20,63 @@ Grafana, Sentry e a execução do workflow n8n num n8n real. Veja a seção 8.
 
 ---
 
+## Veja funcionando
+
+![Demonstração do chat no terminal](docs/imagens/demo-chat.gif)
+
+*GIF desenhado a partir das conversas reais gravadas com LLM em [`exemplos/`](exemplos/README.md): violões até R$ 1000 (dados do catálogo e regra de parcelas) e, em inglês, preço do Takamine GD20, acessório fora de escopo e endereço. A linha cinza mostra `nível · provedor · tools`. Gerado por [`scripts/gerar_demo.py`](scripts/gerar_demo.py).*
+
+![Print: devolução com pedido real verificado](docs/imagens/print-chat.png)
+
+*Print: "me arrependi, posso devolver?" com o pedido 7 verificado pelo e-mail e a janela de 7 dias do manual aplicada à data.*
+
+## Arquitetura: multi-tenant, stateless, escalável e trocável
+
+O projeto é um **monólito modular no meio, com arquitetura hexagonal (portas e adaptadores) nas bordas**. As regras de negócio ficam em Python puro, sem I/O nem SDK; tudo o que fala com o mundo de fora é um adaptador trocável atrás de uma porta. O `import-linter` (14 contratos, no CI) garante as dependências só para dentro.
+
+| Propriedade | Como é garantida |
+|---|---|
+| **Multi-tenant** | Todo acesso a dado ou estado recebe um `TenantContext` (porta `portas/contexto.py`). Config por loja em `config/tenants.yaml` (persona, contatos, limites, manual). Postgres com **schema por tenant** (`search_path` por transação; conexão sem tenant não enxerga tabela). Chaves do Redis com prefixo do tenant. Na API, o tenant vem de `X-Tenant-ID` ou do subdomínio; o token JWT tem de ser do mesmo tenant. Invariantes I3 e I8 testados nos três motores. |
+| **Stateless** | Com `DATABASE_URL` e `REDIS_URL`, o processo da aplicação não guarda conversa nem dado: sessão e rate limit no Redis, dados no Postgres; qualquer réplica atende qualquer mensagem. Sem estado global (regra da composição). Fica no processo, de propósito: circuit breaker e bulkhead por réplica, e a config editada pelo admin (#123). No modo local (sem Redis), a sessão fica na memória do processo (#21). |
+| **Escalável** | `docker compose` sobe Traefik + **3 réplicas** + Postgres + Redis (verificado); o rate limit no Redis vale para todas as réplicas; manifestos Kubernetes com HPA 3–10 (exemplo, não exercitado). |
+| **Trocável** | Cada dependência externa é uma porta com adaptadores escolhidos só em `composicao.py` por configuração (tabela abaixo). A suíte de contrato I1–I8 prova a troca do motor inteiro: passa igual para o nativo, pela API e para o n8n. |
+
+**Onde está o monólito modular**: `src/emporio/modulos/` (regra de negócio, Python puro).
+
+| Módulo | O que contém |
+|---|---|
+| `catalogo/` | produtos, categorias, busca, alternativas sem estoque, equivalentes de descontinuado |
+| `comercial/` | preço vigente, PIX que não acumula com promoção, parcelamento por faixa, pagamento combinado |
+| `pedidos/` | consulta de pedido com verificação por e-mail ou telefone |
+| `politicas/` | horário e próxima abertura, frete, janelas de devolução, troca e garantia |
+| `atendimento/` | solicitações (reclamação, cotação), status e a fachada das 6 tools |
+| `comum/` | shared kernel (`Dinheiro` em centavos) |
+
+Cada módulo tem `dominio.py` (regras) e `aplicacao.py` (casos de uso, a API pública do módulo). Um módulo nunca importa o `dominio` de outro (contrato C3).
+
+**Onde está o hexagonal**: portas em `src/emporio/portas/`, adaptadores em `src/emporio/adaptadores/`.
+
+| Porta (contrato) | Adaptadores | Lado |
+|---|---|---|
+| `MotorDeAtendimento` (`motor.py`) | `motor/nativo` (`AgenteNativo`), `motor/n8n` (`AgenteN8n`) | núcleo do agente |
+| (entrada; chamam a porta acima) | `cli` (Typer), `api` (FastAPI) | **inbound** |
+| `FachadaTools` (`ferramentas.py`) | fachada de `modulos/atendimento`, exposta em `/v1/tools` | inbound (tools por HTTP) |
+| `LLMProvider` (`llm.py`) | `llm/`: Groq, Gemini, Claude, compatível com OpenAI (dinâmico), `LLMFalso` | **outbound** |
+| `Catalogo`, `Pedidos`, `Clientes`, `Solicitacoes` (`repositorios.py`) | `csv/` (modo local), `db/` (Postgres por schema) | outbound |
+| `SessaoStore`, `RateLimiter`, `CircuitoStore`, `Relogio` (`estado.py`) | `memoria/`, `redis/`, `relogio/` | outbound |
+| `GatewayPagamento` (`pagamento.py`) | `pagamento/` (`FakeGatewayPagamento`) | outbound |
+| `ProvedorIdentidade` (`identidade.py`) | `identidade/` (JWT local) | outbound |
+| `Telemetria` (`telemetria.py`) | nula (padrão) e `observabilidade/` (Prometheus, OpenTelemetry) | outbound |
+
+`composicao.py` é o **único** lugar que liga porta a adaptador. Trocar CSV por Postgres, memória por Redis, um LLM por outro ou o motor nativo pelo n8n é configuração (`DATABASE_URL`, `REDIS_URL`, chaves `*_API_KEY` ou `LLM_*`, `MOTOR_ATENDIMENTO`), sem mudar `modulos/`.
+
+### Por que não LangChain ou LangGraph
+
+1. **O LLM redige, o código calcula.** Preço, PIX, parcelas e prazos saem de funções testadas, e uma guarda revisa os valores da resposta antes de entregar. Num loop próprio (cerca de 350 linhas, [`motor/nativo/agente.py`](src/emporio/adaptadores/motor/nativo/agente.py)) esse controle é explícito; num framework ficaria espalhado em callbacks.
+2. **Resiliência sob medida.** Roteamento por complexidade, circuit breaker por provedor (crédito esgotado abre o circuito), fallback entre provedores, deadline por mensagem e bulkhead. Com LangChain seria preciso contornar as abstrações dele.
+3. **Troca de motor provada.** LangGraph acoplaria o núcleo ao framework. Aqui o motor é uma porta: um `AgenteLangGraph` entraria como mais um adaptador, sem mudar o núcleo, e teria de passar na mesma suíte I1–I8.
+4. **Menos dependências e testes deterministas** (`LLMFalso`, sem rede). Detalhes na seção 4.2.
+
 ## Arquitetura em diagramas
 
 Os diagramas são em **Mermaid**, que o GitHub desenha direto na página (abra os links abaixo no próprio GitHub). Foram feitos à mão a partir do código, e cada caixa foi conferida contra um módulo, arquivo ou serviço que existe. A ideia inicial era gerá-los com o [archify](https://github.com/tt-a1i/archify), mas isso exigiria instalar e executar código de terceiros; a decisão foi usar Mermaid, sem instalar nada.
