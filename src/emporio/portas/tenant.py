@@ -4,6 +4,8 @@ Fica em `portas/` porque é um tipo compartilhado: o composition root e os adapt
 YAML. Só o carregador (`emporio.configuracao`) sabe ler o arquivo.
 """
 
+from collections.abc import Callable
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from emporio.portas.contexto import Idioma
@@ -66,3 +68,7 @@ class ConfigTenant(_Modelo):
     deadline_mensagem_s: float = Field(gt=0)
     limites: Limites
     termos_fora_de_escopo: TermosForaDeEscopo
+
+
+ResolvedorConfig = Callable[[str], ConfigTenant]
+"""Dado o `tenant_id`, devolve a `ConfigTenant`. Injetado nos casos de uso (o composition root fornece)."""

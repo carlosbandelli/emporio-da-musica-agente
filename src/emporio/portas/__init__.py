@@ -31,7 +31,7 @@ from emporio.portas.motor import (
     RespostaAtendimento,
 )
 from emporio.portas.repositorios import Catalogo, Clientes, FiltroProdutos, Pedidos, Solicitacoes
-from emporio.portas.tenant import ConfigTenant
+from emporio.portas.tenant import ConfigTenant, ResolvedorConfig
 
 __all__ = [
     "Catalogo",
@@ -59,6 +59,7 @@ __all__ = [
     "RateLimiter",
     "Relogio",
     "RequisicaoLLM",
+    "ResolvedorConfig",
     "RespostaAtendimento",
     "RespostaLLM",
     "ResultadoLimite",
