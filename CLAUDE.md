@@ -4,9 +4,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This is a technical challenge (Artefact, AI Engineer 2026). No code exists yet: the repo has only the brief
-(`desafio_tecnico_ai_eng_artefact.pdf`) and the input data in `data/`. Once code, a dependency manifest and
-run/test commands exist, add them to this file.
+This is a technical challenge (Artefact, AI Engineer 2026). Planning is done; no application code exists yet.
+The brief PDF is local only (gitignored). Source of truth for decisions:
+
+- `docs/arquitetura.md`: architecture (agentic + CAG, LLM routing Groq/Gemini/Claude, modular monolith, hexagonal at
+  the edges, schema-per-tenant Postgres, Redis, resilience values, Traefik, observability, RBAC, i18n, persona
+  "Sônia", how the evaluator runs the project, future improvements).
+- `docs/premissas.md`: assumptions for every ambiguity (18 so far). Add new ones there.
+- `docs/pagamento.md` (payment port design) and `docs/deploy.md` (deploy artifacts and the metrics contract the code
+  must expose). The deploy files assume module/port/env names listed there: follow them.
+
+Once code, a dependency manifest and run/test commands exist, add them to this file.
+
+## How we work (agreed with the user)
+
+- **Never start execution without explicit approval**: no implementation, plan execution, or background agents
+  until the user says so. Propose first (what, which agent, which files), then wait.
+- The plan is written together; **tasks are executed by specialist subagents** (e.g. `python-pro`, `postgres-pro`,
+  `llm-architect`, `fastapi-developer`, `test-automator`). Claude orchestrates, reviews each delivery, runs tests and
+  commits per task.
+- **Core first, extras later**: the core (agent working end to end via `uv run emporio chat` from a clean clone with
+  one LLM key) must be complete before scaling/infra extras.
+- Git: commit and push per step without asking; real incremental history, never squash or force-push.
+- Repo `carlosbandelli/emporio-da-musica-agente` stays **private until delivery**, then must be made public (the
+  GitHub Project board too). Nothing changes after the delivery deadline (date still pending from the user).
+- CI may stay red until code exists; fix it at the end if needed (not a delivery blocker).
+- Secrets live in `.env` / `.mcp.json` (gitignored). Never print, copy or commit them. The Anthropic key expires
+  around 2026-11-07: record Claude example conversations before that; without the key, the complex tier falls back
+  to Gemini.
+- Planning/execution plugins: `/harness:harness-plan` then `/harness:harness-work <range>` (run in ranges, review
+  between them).
 
 ## The task
 
