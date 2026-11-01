@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from collections.abc import Mapping
-from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -15,11 +14,11 @@ from emporio.adaptadores.csv import (
     _leitura,
 )
 from emporio.adaptadores.csv._leitura import interpretar_pagamento, para_centavos
-from emporio.modulos.atendimento.dominio import Solicitacao, TipoSolicitacao
-from emporio.modulos.catalogo.dominio import Produto, StatusProduto
-from emporio.modulos.pedidos.dominio import FormaPagamento, MetodoPagamento, StatusPedido
+from emporio.modulos.catalogo.dominio import Produto
+from emporio.modulos.pedidos.dominio import FormaPagamento, MetodoPagamento
 from emporio.portas import FiltroProdutos, TenantContext
 from emporio.portas.tenant import ConfigTenant
+from tests.adaptadores import contrato_dados as contrato
 from tests.adaptadores.conftest import RAIZ
 
 CTX = TenantContext(tenant_id="emporio")
@@ -46,96 +45,27 @@ def test_interpretar_pagamento() -> None:
 
 
 async def test_catalogo_real(tenants: Tenants) -> None:
-    cat = CatalogoCsv(tenants, RAIZ)
-    todos = await cat.listar_produtos(CTX, FiltroProdutos(incluir_inativos=True))
-    assert len(todos) == 65
-    assert min(p.id for p in todos) == 81
-    assert all(p.preco_centavos > 0 for p in todos)
-    assert any(p.specs for p in todos)
-    categorias = await cat.listar_categorias(CTX)
-    assert {c.id for c in categorias} >= {6, 7, 8}
-    assert not any(p.categoria_id in {6, 7, 8} for p in todos)
-    p81 = await cat.obter_produto(CTX, 81)
-    assert p81 is not None
-    assert p81.preco_centavos == 59990
-    assert p81.specs["strings"] == "nylon"
-    assert await cat.obter_produto(CTX, 1) is None
+    await contrato.verificar_catalogo_real(CatalogoCsv(tenants, RAIZ))
 
 
 async def test_filtros(tenants: Tenants) -> None:
-    cat = CatalogoCsv(tenants, RAIZ)
-    ativos = await cat.listar_produtos(CTX, FiltroProdutos())
-    assert all(p.status is StatusProduto.ATIVO for p in ativos)
-    assert len(ativos) == 62
-    violoes = await cat.listar_produtos(CTX, FiltroProdutos(categoria_id=5, preco_max_centavos=100000))
-    assert violoes
-    assert all(p.categoria_id == 5 and p.preco_centavos <= 100000 for p in violoes)
-    faixa = await cat.listar_produtos(CTX, FiltroProdutos(preco_min_centavos=100000, preco_max_centavos=200000))
-    assert faixa
-    assert all(100000 <= p.preco_centavos <= 200000 for p in faixa)
-    a = await cat.listar_produtos(CTX, FiltroProdutos(texto="YAMAHA c40"))
-    assert [p.id for p in a] == [81]
-    b = await cat.listar_produtos(CTX, FiltroProdutos(texto="violao classico"))  # sem acento
-    assert 81 in {p.id for p in b}
-    todos = await cat.listar_produtos(CTX, FiltroProdutos(incluir_inativos=True))
-    assert sum(1 for p in todos if p.status is not StatusProduto.ATIVO) == 3
+    await contrato.verificar_filtros(CatalogoCsv(tenants, RAIZ))
 
 
 async def test_promocoes_todas_as_linhas(tenants: Tenants) -> None:
-    cat = CatalogoCsv(tenants, RAIZ)
-    todas = [p for pid in range(81, 146) for p in await cat.listar_promocoes(CTX, pid)]
-    assert len(todas) == 25
-    assert sum(1 for p in todas if p.ativa) == 4
-    assert [len(await cat.listar_promocoes(CTX, pid)) > 1 for pid in (93, 96, 99)].count(True) >= 1
+    await contrato.verificar_promocoes_todas_as_linhas(CatalogoCsv(tenants, RAIZ))
 
 
 async def test_pedidos_real(tenants: Tenants) -> None:
-    ped = PedidosCsv(tenants, RAIZ)
-    p8 = await ped.obter_pedido(CTX, 8)
-    assert p8 is not None
-    assert p8.status is StatusPedido.ENVIADO
-    assert p8.codigo_rastreio
-    assert p8.previsao_entrega == date(2026, 2, 28)
-    assert len(p8.itens) >= 1
-    p1 = await ped.obter_pedido(CTX, 1)
-    assert p1 is not None
-    assert p1.total_centavos == 1149900  # R$ 11.499,00 (premissa #22)
-    p4 = await ped.obter_pedido(CTX, 4)
-    assert p4 is not None
-    assert p4.total_centavos == 79990
-    p2 = await ped.obter_pedido(CTX, 2)
-    assert p2 is not None
-    assert p2.pagamento == MetodoPagamento(FormaPagamento.CREDITO, 6)
-    p9 = await ped.obter_pedido(CTX, 9)
-    assert p9 is not None
-    assert p9.codigo_rastreio is None
-    assert p9.previsao_entrega is None
-    p17 = await ped.obter_pedido(CTX, 17)
-    assert p17 is not None
-    assert p17.status is StatusPedido.CANCELADO
-    assert p17.observacoes
-    assert await ped.obter_pedido(CTX, 999) is None
+    await contrato.verificar_pedidos_real(PedidosCsv(tenants, RAIZ))
 
 
 async def test_total_confere_com_itens(tenants: Tenants) -> None:
-    ped, cat = PedidosCsv(tenants, RAIZ), CatalogoCsv(tenants, RAIZ)
-    p = await ped.obter_pedido(CTX, 1)
-    assert p is not None
-    soma = 0
-    for item in p.itens:
-        produto = await cat.obter_produto(CTX, item.produto_id)
-        assert produto is not None
-        soma += produto.preco_centavos * item.quantidade
-    assert soma == p.total_centavos
+    await contrato.verificar_total_confere_com_itens(PedidosCsv(tenants, RAIZ), CatalogoCsv(tenants, RAIZ))
 
 
 async def test_clientes(tenants: Tenants) -> None:
-    cli = ClientesCsv(tenants, RAIZ)
-    c = await cli.obter_cliente(CTX, 3)
-    assert c is not None
-    assert c.id == 3
-    assert "@" in c.email
-    assert await cli.obter_cliente(CTX, 99999) is None
+    await contrato.verificar_clientes(ClientesCsv(tenants, RAIZ))
 
 
 async def test_tenant_desconhecido(tenants: Tenants) -> None:
@@ -242,36 +172,16 @@ async def test_pedidos_ruins_e_sem_pii_nos_logs(
     assert "99999" not in caplog.text
 
 
-def _solic(chave: str, desc: str = "d") -> Solicitacao:
-    return Solicitacao(
-        id=f"id-{chave}",
-        tipo=TipoSolicitacao.RECLAMACAO,
-        descricao=desc,
-        sessao_id="s1",
-        chave_idempotencia=chave,
-        criada_em=datetime(2026, 3, 1, 12, 0, tzinfo=UTC),
-        contato="x",
-    )
-
-
 async def test_solicitacoes_idempotente(tmp_path: Path) -> None:
     repo = SolicitacoesJsonl(tmp_path)
-    a = await repo.registrar(CTX, _solic("k1"))
-    b = await repo.registrar(CTX, _solic("k1", "outra descricao"))
-    assert a == b
-    await repo.registrar(CTX, _solic("k2"))
+    await contrato.verificar_solicitacoes_idempotente(repo, SolicitacoesJsonl(tmp_path))
     linhas = (tmp_path / "emporio" / "solicitacoes.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert len(linhas) == 2
-    listadas = await SolicitacoesJsonl(tmp_path).listar(CTX)  # outra instância lê do arquivo
-    assert [s.chave_idempotencia for s in listadas] == ["k1", "k2"]
-    assert listadas[0] == a
     assert await repo.listar(TenantContext(tenant_id="outro")) == ()
 
 
 async def test_solicitacoes_concorrentes_sem_duplicar(tmp_path: Path) -> None:
-    repo = SolicitacoesJsonl(tmp_path)
-    await asyncio.gather(*(repo.registrar(CTX, _solic("k")) for _ in range(8)))
-    assert len(await repo.listar(CTX)) == 1
+    await contrato.verificar_solicitacoes_concorrentes(SolicitacoesJsonl(tmp_path))
 
 
 async def test_solicitacoes_tenant_invalido(tmp_path: Path) -> None:
