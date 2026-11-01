@@ -1,3 +1,5 @@
+import asyncio
+import random
 from collections.abc import Mapping
 
 import pytest
@@ -76,6 +78,21 @@ async def test_rate_limiter_erros(tenants: Mapping[str, ConfigTenant]) -> None:
         await rl.consumir(A, "inexistente", "x")
 
 
+class _JitterMaximo(random.Random):
+    """Jitter determinístico: `uniform(a, b)` devolve `b`, ou seja, a duração cheia `d`."""
+
+    def uniform(self, a: float, b: float) -> float:
+        return b
+
+
+def _circuito(tempo: Tempo) -> CircuitoStoreMemoria:
+    return CircuitoStoreMemoria(fonte_tempo=tempo, aleatorio=_JitterMaximo())
+
+
+def _duracao_aberta(c: CircuitoStoreMemoria, tempo: Tempo, provedor: str = "groq") -> float:
+    return c._provedores[provedor].reabre_em - tempo.t
+
+
 async def _falhar(c: CircuitoStoreMemoria, n: int) -> None:
     for _ in range(n):
         await c.registrar_falha("groq", permanente=False)
@@ -83,7 +100,7 @@ async def _falhar(c: CircuitoStoreMemoria, n: int) -> None:
 
 async def test_circuito_abre_apos_5_falhas_consecutivas_e_meio_aberto() -> None:
     tempo = Tempo()
-    c = CircuitoStoreMemoria(fonte_tempo=tempo)
+    c = _circuito(tempo)
     await _falhar(c, 4)
     assert await c.estado("groq") is EstadoCircuito.FECHADO
     await _falhar(c, 1)
@@ -100,13 +117,13 @@ async def test_circuito_abre_apos_5_falhas_consecutivas_e_meio_aberto() -> None:
 
 async def test_circuito_sonda_falha_reabre() -> None:
     tempo = Tempo()
-    c = CircuitoStoreMemoria(fonte_tempo=tempo)
+    c = _circuito(tempo)
     await _falhar(c, 5)
     tempo.t += 30
     assert await c.estado("groq") is EstadoCircuito.MEIO_ABERTO
     await c.registrar_falha("groq", permanente=False)
     assert await c.estado("groq") is EstadoCircuito.ABERTO
-    tempo.t += 29
+    tempo.t += 59  # reabertura consecutiva: 30 * 2 = 60 s
     assert await c.estado("groq") is EstadoCircuito.ABERTO
     tempo.t += 1
     assert await c.estado("groq") is EstadoCircuito.MEIO_ABERTO
@@ -114,7 +131,7 @@ async def test_circuito_sonda_falha_reabre() -> None:
 
 async def test_circuito_permanente_abre_na_hora_por_10_min() -> None:
     tempo = Tempo()
-    c = CircuitoStoreMemoria(fonte_tempo=tempo)
+    c = _circuito(tempo)
     await c.registrar_falha("claude", permanente=True)
     assert await c.estado("claude") is EstadoCircuito.ABERTO
     tempo.t += 599
@@ -125,7 +142,7 @@ async def test_circuito_permanente_abre_na_hora_por_10_min() -> None:
 
 async def test_circuito_taxa_de_falha_na_janela() -> None:
     tempo = Tempo()
-    c = CircuitoStoreMemoria(fonte_tempo=tempo)
+    c = _circuito(tempo)
     for _ in range(5):  # alterna: nunca 5 consecutivas
         await c.registrar_falha("g", permanente=False)
         await c.registrar_sucesso("g")
@@ -152,3 +169,88 @@ async def test_circuito_sucesso_zera_consecutivas() -> None:
     await c.registrar_sucesso("groq")
     await _falhar(c, 4)
     assert await c.estado("groq") is EstadoCircuito.FECHADO
+
+
+async def _abrir_e_falhar_sondas(
+    c: CircuitoStoreMemoria, tempo: Tempo, *, permanente: bool, sondas: int
+) -> list[float]:
+    """Abre o circuito e faz `sondas` sondas falharem; devolve as durações de abertura sucessivas."""
+    await c.registrar_falha("groq", permanente=permanente)
+    if not permanente:
+        await _falhar(c, 4)
+    duracoes = [_duracao_aberta(c, tempo)]
+    for _ in range(sondas):
+        tempo.t += duracoes[-1]
+        assert await c.estado("groq") is EstadoCircuito.MEIO_ABERTO
+        await c.registrar_falha("groq", permanente=permanente)
+        duracoes.append(_duracao_aberta(c, tempo))
+    return duracoes
+
+
+async def test_circuito_backoff_transitorio_com_jitter_e_teto() -> None:
+    tempo = Tempo()
+    c = CircuitoStoreMemoria(fonte_tempo=tempo, aleatorio=random.Random(7))
+    duracoes = await _abrir_e_falhar_sondas(c, tempo, permanente=False, sondas=6)
+    for dur, d in zip(duracoes, [30, 60, 120, 240, 300, 300, 300], strict=True):
+        assert d / 2 <= dur <= d
+    assert len({round(x, 6) for x in duracoes[-3:]}) > 1  # jitter realmente varia
+
+
+async def test_circuito_backoff_permanente_ate_o_teto() -> None:
+    tempo = Tempo()
+    c = CircuitoStoreMemoria(fonte_tempo=tempo, aleatorio=random.Random(11))
+    duracoes = await _abrir_e_falhar_sondas(c, tempo, permanente=True, sondas=4)
+    for dur, d in zip(duracoes, [600, 1200, 2400, 3600, 3600], strict=True):
+        assert d / 2 <= dur <= d
+
+
+async def test_circuito_backoff_sem_jitter_e_exponencial_exato() -> None:
+    tempo = Tempo()
+    c = _circuito(tempo)
+    duracoes = await _abrir_e_falhar_sondas(c, tempo, permanente=False, sondas=5)
+    assert duracoes == [30, 60, 120, 240, 300, 300]
+
+
+async def test_circuito_tipo_da_reabertura_segue_a_falha_da_sonda() -> None:
+    tempo = Tempo()
+    c = _circuito(tempo)
+    await _falhar(c, 5)
+    tempo.t += 30
+    assert await c.estado("groq") is EstadoCircuito.MEIO_ABERTO
+    await c.registrar_falha("groq", permanente=True)  # n=1 na escala permanente
+    assert _duracao_aberta(c, tempo) == 1200
+
+
+async def test_circuito_sucesso_da_sonda_zera_o_backoff() -> None:
+    tempo = Tempo()
+    c = _circuito(tempo)
+    duracoes = await _abrir_e_falhar_sondas(c, tempo, permanente=False, sondas=2)
+    assert duracoes == [30, 60, 120]
+    tempo.t += 120
+    assert await c.estado("groq") is EstadoCircuito.MEIO_ABERTO
+    await c.registrar_sucesso("groq")
+    assert await c.estado("groq") is EstadoCircuito.FECHADO
+    await _falhar(c, 5)
+    assert _duracao_aberta(c, tempo) == 30  # volta à base
+
+
+async def test_circuito_singleflight_da_sonda() -> None:
+    tempo = Tempo()
+    c = _circuito(tempo)
+    await _falhar(c, 5)
+    tempo.t += 30
+    estados = await asyncio.gather(*(c.estado("groq") for _ in range(50)))
+    assert estados.count(EstadoCircuito.MEIO_ABERTO) == 1
+    assert estados.count(EstadoCircuito.ABERTO) == 49
+
+
+async def test_circuito_sonda_que_nunca_reporta_e_liberada() -> None:
+    tempo = Tempo()
+    c = _circuito(tempo)
+    await _falhar(c, 5)
+    tempo.t += 30
+    assert await c.estado("groq") is EstadoCircuito.MEIO_ABERTO
+    tempo.t += 29
+    assert await c.estado("groq") is EstadoCircuito.ABERTO
+    tempo.t += 1
+    assert await c.estado("groq") is EstadoCircuito.MEIO_ABERTO

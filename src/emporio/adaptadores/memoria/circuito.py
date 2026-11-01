@@ -1,5 +1,6 @@
 """`CircuitoStoreMemoria`: circuit breaker por provedor (política da arquitetura §5.2)."""
 
+import random
 import time
 from collections import deque
 from collections.abc import Callable
@@ -16,8 +17,11 @@ class PoliticaCircuito:
     taxa_falha: float = 0.5
     janela_s: float = 30.0
     min_chamadas_janela: int = 10
-    abertura_transitoria_s: float = 30.0
-    abertura_permanente_s: float = 600.0
+    abertura_transitoria_s: float = 30.0  # base do backoff transitório
+    abertura_permanente_s: float = 600.0  # base do backoff permanente
+    teto_transitoria_s: float = 300.0
+    teto_permanente_s: float = 3600.0
+    fator_backoff: float = 2.0
 
 
 @dataclass(slots=True)
@@ -28,6 +32,7 @@ class _Provedor:
     reabre_em: float = 0.0
     sonda_em_andamento: bool = False
     sonda_expira_em: float = 0.0
+    reaberturas: int = 0  # reaberturas consecutivas (sonda falhou); zera quando a sonda tem sucesso
 
 
 class CircuitoStoreMemoria:
@@ -36,15 +41,20 @@ class CircuitoStoreMemoria:
     Meio-aberto permite uma única sonda: a primeira consulta de `estado()` após o tempo de abertura devolve
     `MEIO_ABERTO` e reserva a sonda; as demais devolvem `ABERTO` até a sonda reportar sucesso (fecha) ou falha
     (reabre). Se a sonda nunca reportar, uma nova é liberada após `abertura_transitoria_s`.
+
+    O tempo de abertura cresce a cada reabertura consecutiva: `d = min(teto, base * fator**n)` com jitter
+    "equal" (`d/2 + U(0, d/2)`), para que réplicas não sondem juntas. Sucesso da sonda zera `n`.
     """
 
     def __init__(
         self,
         politica: PoliticaCircuito | None = None,
         fonte_tempo: Callable[[], float] = time.monotonic,
+        aleatorio: random.Random | None = None,
     ) -> None:
         self._politica = politica or PoliticaCircuito()
         self._agora = fonte_tempo
+        self._aleatorio = aleatorio or random.Random()
         self._provedores: dict[str, _Provedor] = {}
 
     def _obter(self, provedor: str) -> _Provedor:
@@ -58,6 +68,8 @@ class CircuitoStoreMemoria:
             p.estado = EstadoCircuito.MEIO_ABERTO
             p.sonda_em_andamento = False
         if p.estado is EstadoCircuito.MEIO_ABERTO:
+            # Singleflight: não há `await` entre checar e reservar a sonda; num processo asyncio isso é
+            # atômico e funciona como lock. A versão Redis (Fase 2) usará `SET NX PX` na chave da sonda.
             if p.sonda_em_andamento and agora < p.sonda_expira_em:
                 return EstadoCircuito.ABERTO
             p.sonda_em_andamento = True
@@ -80,10 +92,10 @@ class CircuitoStoreMemoria:
         """Falha permanente abre na hora (10 min); transitória abre por limiar (30 s)."""
         p = self._obter(provedor)
         if permanente:
-            self._abrir(p, self._politica.abertura_permanente_s)
+            self._abrir(p, permanente=True)
             return
         if p.estado is EstadoCircuito.MEIO_ABERTO:
-            self._abrir(p, self._politica.abertura_transitoria_s)
+            self._abrir(p, permanente=False)
             return
         if p.estado is EstadoCircuito.ABERTO:
             return
@@ -93,7 +105,7 @@ class CircuitoStoreMemoria:
         total = len(p.janela)
         excedeu_taxa = total >= self._politica.min_chamadas_janela and falhas / total >= self._politica.taxa_falha
         if p.consecutivas >= self._politica.falhas_consecutivas or excedeu_taxa:
-            self._abrir(p, self._politica.abertura_transitoria_s)
+            self._abrir(p, permanente=False)
 
     def _registrar_janela(self, p: _Provedor, *, sucesso: bool) -> None:
         agora = self._agora()
@@ -101,15 +113,31 @@ class CircuitoStoreMemoria:
         while p.janela and agora - p.janela[0][0] > self._politica.janela_s:
             p.janela.popleft()
 
-    def _abrir(self, p: _Provedor, duracao_s: float) -> None:
+    def _duracao(self, n: int, *, permanente: bool) -> float:
+        pol = self._politica
+        base, teto = (
+            (pol.abertura_permanente_s, pol.teto_permanente_s)
+            if permanente
+            else (pol.abertura_transitoria_s, pol.teto_transitoria_s)
+        )
+        d = min(teto, base * pol.fator_backoff**n)
+        return d / 2 + self._aleatorio.uniform(0.0, d / 2)
+
+    def _abrir(self, p: _Provedor, *, permanente: bool) -> None:
+        if p.estado is EstadoCircuito.MEIO_ABERTO:
+            p.reaberturas += 1  # a sonda falhou: reabertura consecutiva (a primeira abertura usa n=0)
+        elif p.estado is EstadoCircuito.FECHADO:
+            p.reaberturas = 0
+        n = p.reaberturas
         p.estado = EstadoCircuito.ABERTO
-        p.reabre_em = self._agora() + duracao_s
+        p.reabre_em = self._agora() + self._duracao(n, permanente=permanente)
         p.sonda_em_andamento = False
         p.consecutivas = 0
         p.janela.clear()
 
     def _fechar(self, p: _Provedor) -> None:
         p.estado = EstadoCircuito.FECHADO
+        p.reaberturas = 0
         p.consecutivas = 0
         p.sonda_em_andamento = False
         p.janela.clear()

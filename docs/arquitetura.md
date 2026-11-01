@@ -242,9 +242,9 @@ deadline da requisição → bulkhead → timeout → retry (backoff exponencial
 | Parâmetro | Valor |
 |---|---|
 | Abre após | 5 falhas transitórias seguidas **ou** ≥ 50% de falhas em janela de 30 s (mínimo 10 chamadas) |
-| Erro de autenticação (`401`/`403`) | abre imediatamente |
-| Tempo aberto | 30 s (transitório) · 10 min (autenticação) |
-| Meio-aberto | 1 chamada de teste: sucesso fecha, falha reabre |
+| Erro de autenticação (`401`/`403`) ou crédito/cota esgotados | abre imediatamente |
+| Tempo aberto | backoff exponencial com jitter "equal": `d = min(teto, base × 2^n)`, n = reaberturas consecutivas (zera quando a sonda passa); tempo efetivo `d/2 + U(0, d/2)`. Transitório: base 30 s, teto 5 min · autenticação/crédito: base 10 min, teto 1 h |
+| Meio-aberto | 1 única chamada de teste (singleflight: reserva atômica no asyncio; na Fase 2, `SET NX PX` no Redis): sucesso fecha, falha reabre com o próximo degrau do backoff; sonda que não reporta é liberada após 30 s |
 
 **Bulkhead (chamadas simultâneas por pod)**: Groq 10 · Gemini 10 · Claude 5.
 
