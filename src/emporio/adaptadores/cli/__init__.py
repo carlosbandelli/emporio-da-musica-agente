@@ -3,18 +3,23 @@
 A CLI não monta nada sozinha: recebe as fábricas por `criar_app(...)` (padrão: composição real). Os testes passam
 fábricas que montam a aplicação com `LLMFalso`, sem tocar `adaptadores.llm`. Não há estado global mutável.
 
-Códigos de saída: 0 ok; 2 erro de configuração (sem chave, tenant desconhecido, motor inválido, YAML inválido).
+Dois modos de `chat`: local (padrão, motor no mesmo processo) e remoto (`--api URL`: cada mensagem vai para
+`POST {URL}/v1/chat` com `X-Tenant-ID` e o `session_id` da execução, via `httpx`; nada é montado localmente).
+
+Códigos de saída: 0 ok; 2 erro de configuração (sem chave, tenant desconhecido, motor inválido, YAML inválido);
+3 API remota inalcançável.
 """
 
 import asyncio
 import contextlib
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
 
 import emporio
@@ -28,13 +33,34 @@ from emporio.composicao import (
     montar,
     montar_diagnostico,
 )
-from emporio.portas import DiagnosticoInfo, Idioma, MensagemCliente, Papel, TenantContext
+from emporio.portas import (
+    CodigoResposta,
+    DiagnosticoInfo,
+    Idioma,
+    MensagemCliente,
+    Papel,
+    RespostaAtendimento,
+    TenantContext,
+)
 
 SAIDA_CONFIGURACAO = 2
+SAIDA_API_INALCANCAVEL = 3
+TIMEOUT_API_S = 60.0
+"""Acima do deadline de mensagem do tenant (30 s): a API responde com a mensagem fixa antes de a CLI desistir."""
+PERSONA_REMOTA_PADRAO = "Atendente"
 COMANDOS_SAIDA = frozenset({"sair", "exit", "quit"})
 
 FabricaAplicacao = Callable[[], Aplicacao]
 FabricaDiagnostico = Callable[[], DiagnosticoLocal]
+FabricaClienteHttp = Callable[[str], httpx.AsyncClient]
+"""Dada a URL base da API, devolve o cliente HTTP (os testes injetam um transporte ASGI)."""
+Turno = tuple[str, RespostaAtendimento]
+"""(nome da persona, resposta) de uma mensagem."""
+Responder = Callable[[str], Awaitable[Turno]]
+
+
+class _ErroRemoto(Exception):  # noqa: N818 - nome em pt-BR do projeto
+    """A API respondeu com erro de borda (400/404/422...): mostra a mensagem e segue a conversa."""
 
 
 def _montar_padrao() -> Aplicacao:
@@ -54,6 +80,10 @@ def _utf8() -> None:
                 reconfigurar(encoding="utf-8")
 
 
+def _cliente_http_padrao(url: str) -> httpx.AsyncClient:
+    return httpx.AsyncClient(base_url=url, timeout=TIMEOUT_API_S)
+
+
 def _falhar(mensagem: str) -> typer.Exit:
     typer.echo(mensagem, err=True)
     return typer.Exit(SAIDA_CONFIGURACAO)
@@ -62,6 +92,7 @@ def _falhar(mensagem: str) -> typer.Exit:
 def criar_app(
     montar_aplicacao: FabricaAplicacao = _montar_padrao,
     montar_diag: FabricaDiagnostico = _diagnostico_padrao,
+    cliente_http: FabricaClienteHttp = _cliente_http_padrao,
 ) -> typer.Typer:
     """Cria a aplicação Typer com as fábricas injetadas (testes trocam; produção usa a composição real)."""
     app = typer.Typer(
@@ -88,9 +119,16 @@ def criar_app(
         gravar: Annotated[
             Path | None, typer.Option("--gravar", help="Salva a conversa neste arquivo Markdown, turno a turno.")
         ] = None,
+        api: Annotated[
+            str | None,
+            typer.Option("--api", help="URL base da API (modo remoto): cada mensagem vai para POST {URL}/v1/chat."),
+        ] = None,
     ) -> None:
-        """Conversa com a Sônia no terminal (modo local, mesmo processo)."""
+        """Conversa com a Sônia no terminal (local, no mesmo processo; ou remoto com --api URL)."""
         _utf8()
+        if api:
+            _chat_remoto(api, tenant, idioma, gravar, cliente_http)
+            return
         try:
             aplicacao = montar_aplicacao()
         except ErroConfiguracao as exc:
@@ -124,7 +162,7 @@ def criar_app(
         _cabecalho(aplicacao, persona, ctx, gravar)
 
         try:
-            asyncio.run(_conversar(aplicacao, ctx, persona, gravador))
+            asyncio.run(_conversar(_responder_local(aplicacao, ctx, persona, gravador), persona))
         except KeyboardInterrupt:
             typer.echo(f"\n{persona}: Até logo!")
 
@@ -156,13 +194,26 @@ def _cabecalho(aplicacao: Aplicacao, persona: str, ctx: TenantContext, gravar: P
     typer.echo("Digite 'sair' (ou Ctrl+C) para encerrar.\n")
 
 
-async def _conversar(aplicacao: Aplicacao, ctx: TenantContext, persona: str, gravador: GravadorMarkdown | None) -> None:
+def _responder_local(
+    aplicacao: Aplicacao, ctx: TenantContext, persona: str, gravador: GravadorMarkdown | None
+) -> Responder:
+    sessao_id = str(uuid.uuid4())
+
+    async def responder(texto: str) -> Turno:
+        resposta = await aplicacao.motor.responder(ctx, sessao_id, MensagemCliente(texto))
+        if gravador:
+            gravador.turno(persona, texto, resposta)
+        return persona, resposta
+
+    return responder
+
+
+async def _conversar(responder: Responder, persona: str) -> None:
     """Um único event loop por execução; a leitura é bloqueante de propósito.
 
     `input()` roda direto na corrotina, sem `to_thread`: nada mais precisa do loop enquanto se espera o cliente, e uma
     thread presa em `input()` travaria o encerramento do `asyncio.run` após Ctrl+C.
     """
-    sessao_id = str(uuid.uuid4())
     while True:
         try:
             texto = input("Você: ").strip()
@@ -174,10 +225,94 @@ async def _conversar(aplicacao: Aplicacao, ctx: TenantContext, persona: str, gra
         if texto.lower() in COMANDOS_SAIDA:
             typer.echo(f"{persona}: Até logo!")
             return
-        resposta = await aplicacao.motor.responder(ctx, sessao_id, MensagemCliente(texto))
+        try:
+            persona, resposta = await responder(texto)
+        except _ErroRemoto as erro:
+            typer.echo(f"Erro da API: {erro}\n", err=True)
+            continue
         typer.echo(f"{persona}: {resposta.texto}\n")
-        if gravador:
-            gravador.turno(persona, texto, resposta)
+
+
+# --- modo remoto ------------------------------------------------------------------------------------------------------
+def _chat_remoto(
+    url: str, tenant: str | None, idioma: Idioma | None, gravar: Path | None, cliente_http: FabricaClienteHttp
+) -> None:
+    if tenant is None:
+        try:
+            tenant = carregar_settings().tenant_padrao
+        except ErroConfiguracao as exc:
+            raise _falhar(f"Erro de configuração: {exc}") from None
+    gravador = GravadorMarkdown(gravar) if gravar else None
+    typer.echo("Empório da Música - atendimento (modo remoto)")
+    typer.echo(f"API: {url} | tenant: {tenant} | idioma: {idioma.value if idioma else 'padrão do tenant'}")
+    if gravar:
+        typer.echo(f"Gravando a conversa em {gravar}")
+    typer.echo("Digite 'sair' (ou Ctrl+C) para encerrar.\n")
+    try:
+        asyncio.run(_conversar_remoto(url, tenant, idioma, gravador, cliente_http))
+    except KeyboardInterrupt:
+        typer.echo(f"\n{PERSONA_REMOTA_PADRAO}: Até logo!")
+
+
+async def _conversar_remoto(
+    url: str, tenant: str, idioma: Idioma | None, gravador: GravadorMarkdown | None, cliente_http: FabricaClienteHttp
+) -> None:
+    sessao_id = str(uuid.uuid4())
+    cabecalho_gravado = False
+
+    async with cliente_http(url) as cliente:
+
+        async def responder(texto: str) -> Turno:
+            nonlocal cabecalho_gravado
+            persona, resposta = await _enviar(cliente, url, tenant, sessao_id=sessao_id, texto=texto, idioma=idioma)
+            if gravador:
+                if not cabecalho_gravado:
+                    gravador.cabecalho(
+                        persona=persona,
+                        tenant=tenant,
+                        idioma=resposta.idioma.value,
+                        provedores=(resposta.provedor,) if resposta.provedor else (),
+                        motor=f"remoto ({url})",
+                        data_referencia=None,
+                        agora=datetime.now().astimezone(),
+                    )
+                    cabecalho_gravado = True
+                gravador.turno(persona, texto, resposta)
+            return persona, resposta
+
+        await _conversar(responder, PERSONA_REMOTA_PADRAO)
+
+
+async def _enviar(
+    cliente: httpx.AsyncClient, url: str, tenant: str, *, sessao_id: str, texto: str, idioma: Idioma | None
+) -> Turno:
+    corpo: dict[str, str] = {"session_id": sessao_id, "mensagem": texto}
+    if idioma is not None:
+        corpo["idioma"] = idioma.value
+    try:
+        http = await cliente.post("/v1/chat", json=corpo, headers={"X-Tenant-ID": tenant})
+    except httpx.HTTPError as erro:
+        typer.echo(f"Não consegui falar com a API em {url} ({type(erro).__name__}).", err=True)
+        raise typer.Exit(SAIDA_API_INALCANCAVEL) from None
+    try:
+        dados = http.json()
+    except ValueError:
+        raise _ErroRemoto(f"resposta inesperada (HTTP {http.status_code})") from None
+    if not isinstance(dados, dict):
+        raise _ErroRemoto(f"resposta inesperada (HTTP {http.status_code})")
+    if "texto" not in dados:  # erro de borda: {codigo, mensagem}
+        raise _ErroRemoto(str(dados.get("mensagem", f"HTTP {http.status_code}")))
+    resposta = RespostaAtendimento(
+        texto=str(dados["texto"]),
+        idioma=Idioma(dados["idioma"]),
+        nivel=dados.get("nivel"),
+        provedor=dados.get("provedor"),
+        tools_chamadas=tuple(dados.get("tools_chamadas") or ()),
+        degradada=bool(dados.get("degradada", False)),
+        codigo=CodigoResposta(dados["codigo"]) if dados.get("codigo") else None,
+        retry_after_s=dados.get("retry_after_s"),
+    )
+    return str(dados.get("persona") or PERSONA_REMOTA_PADRAO), resposta
 
 
 def _imprimir_diagnostico(info: DiagnosticoInfo) -> None:
@@ -206,4 +341,4 @@ def _imprimir_diagnostico(info: DiagnosticoInfo) -> None:
 
 app = criar_app()
 
-__all__ = ["SAIDA_CONFIGURACAO", "app", "criar_app"]
+__all__ = ["SAIDA_API_INALCANCAVEL", "SAIDA_CONFIGURACAO", "app", "criar_app"]

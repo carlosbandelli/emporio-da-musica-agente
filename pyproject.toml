@@ -138,8 +138,11 @@ name = "C1d - adaptadores nao importam composicao"
 type = "forbidden"
 source_modules = ["emporio.adaptadores"]
 forbidden_modules = ["emporio.composicao"]
-# Exceção única: o adaptador de entrada recebe o motor pela composição (C4, arquitetura §3.3).
-ignore_imports = ["emporio.adaptadores.cli -> emporio.composicao"]
+# Exceção única: os adaptadores de entrada recebem o motor pela composição (C4, arquitetura §3.3).
+ignore_imports = [
+    "emporio.adaptadores.cli -> emporio.composicao",
+    "emporio.adaptadores.api.app -> emporio.composicao",
+]
 
 # --- C2: sem SDKs/frameworks externos em modulos e portas -----------------
 [[tool.importlinter.contracts]]
@@ -220,12 +223,11 @@ forbidden_modules = [
 allow_indirect_imports = true
 
 # --- C4: adaptadores de entrada so conhecem portas e composicao -----------
-# Fase 2: acrescentar "emporio.adaptadores.api" em source_modules.
 # `composicao` importa tudo, por isso imports indiretos sao permitidos.
 [[tool.importlinter.contracts]]
-name = "C4 - CLI nao importa modulos nem outros adaptadores"
+name = "C4 - CLI e API nao importam modulos nem outros adaptadores"
 type = "forbidden"
-source_modules = ["emporio.adaptadores.cli"]
+source_modules = ["emporio.adaptadores.cli", "emporio.adaptadores.api"]
 forbidden_modules = [
     "emporio.modulos",
     "emporio.adaptadores.llm",
@@ -236,17 +238,22 @@ forbidden_modules = [
 allow_indirect_imports = true
 
 # --- C5: adaptadores independentes entre si -------------------------------
-# Fase 2: acrescentar api, db, redis e motor.n8n quando existirem.
+# Fase 2: acrescentar db, redis e motor.n8n quando existirem (api já está).
 [[tool.importlinter.contracts]]
 name = "C5 - adaptadores independentes entre si"
 type = "independence"
 modules = [
     "emporio.adaptadores.cli",
+    "emporio.adaptadores.api",
     "emporio.adaptadores.motor",
     "emporio.adaptadores.llm",
     "emporio.adaptadores.csv",
     "emporio.adaptadores.memoria",
     "emporio.adaptadores.relogio",
+    "emporio.adaptadores.redis",
 ]
-# A CLI chega aos outros adaptadores só através da composição (C4); essa é a única aresta permitida.
-ignore_imports = ["emporio.adaptadores.cli -> emporio.composicao"]
+# A CLI e a API chegam aos outros adaptadores só através da composição (C4); essa é a única aresta permitida.
+ignore_imports = [
+    "emporio.adaptadores.cli -> emporio.composicao",
+    "emporio.adaptadores.api.app -> emporio.composicao",
+]

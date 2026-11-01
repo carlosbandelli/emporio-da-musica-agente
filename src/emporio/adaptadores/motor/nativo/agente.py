@@ -36,7 +36,7 @@ from emporio.modulos.politicas.dominio import FUSO_LOJA
 from emporio.portas.contexto import Idioma, Papel, TenantContext
 from emporio.portas.estado import EstadoSessao, RateLimiter, Relogio, SessaoStore
 from emporio.portas.llm import DefinicaoTool, ErroPrazoEsgotado, MensagemLLM, PapelMensagem, RequisicaoLLM
-from emporio.portas.motor import MensagemCliente, RespostaAtendimento
+from emporio.portas.motor import CodigoResposta, MensagemCliente, RespostaAtendimento
 from emporio.portas.tenant import ConfigTenant
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,12 @@ MAX_MENSAGENS_HISTORICO: Final = 40
 CHAVE_RATE_LIMIT_TENANT: Final = "global"
 
 RelogioMonotonic = Callable[[], float]
+
+_CODIGO_DA_FALHA: Final = {
+    ChaveMensagem.INDISPONIVEL: CodigoResposta.INDISPONIVEL,
+    ChaveMensagem.DEADLINE: CodigoResposta.DEADLINE,
+}
+"""Falhas do turno com código próprio; as demais viram `CodigoResposta.ERRO`."""
 
 
 class FachadaTools(Protocol):
@@ -132,6 +138,7 @@ class AgenteNativo:
                 texto=mensagem_fixa(ChaveMensagem.ERRO, ctx.idioma, contatos=config.contatos if config else None),
                 idioma=ctx.idioma,
                 degradada=True,
+                codigo=CodigoResposta.ERRO,
             )
 
     # --- turno ------------------------------------------------------------------------------------------------------
@@ -140,24 +147,33 @@ class AgenteNativo:
         manual = self._politicas.get(ctx.tenant_id)
         if config is None or manual is None:
             logger.warning("motor nativo: tenant desconhecido tenant=%s", ctx.tenant_id)
-            return RespostaAtendimento(mensagem_fixa(ChaveMensagem.ERRO, ctx.idioma), ctx.idioma, degradada=True)
+            return RespostaAtendimento(
+                mensagem_fixa(ChaveMensagem.ERRO, ctx.idioma), ctx.idioma, degradada=True, codigo=CodigoResposta.ERRO
+            )
 
         estado = await self._sessoes.obter(ctx, sessao_id) or EstadoSessao()
         idioma_atual = estado.idioma or self._idioma_do_canal(ctx, config)
         texto = mensagem.texto
 
         if not texto.strip():
-            return RespostaAtendimento(mensagem_fixa(ChaveMensagem.VAZIA, idioma_atual), idioma_atual)
+            return RespostaAtendimento(
+                mensagem_fixa(ChaveMensagem.VAZIA, idioma_atual), idioma_atual, codigo=CodigoResposta.ENTRADA_INVALIDA
+            )
         limite = config.limites.tamanho_max_mensagem
         if len(texto) > limite:
             fixa = mensagem_fixa(ChaveMensagem.LONGA, idioma_atual, limite_caracteres=limite)
-            return RespostaAtendimento(fixa, idioma_atual)
+            return RespostaAtendimento(fixa, idioma_atual, codigo=CodigoResposta.ENTRADA_INVALIDA)
 
         for camada, chave in (("sessao", sessao_id), ("tenant", CHAVE_RATE_LIMIT_TENANT)):
-            if not (await self._limitador.consumir(ctx, camada, chave)).permitido:
+            consumo = await self._limitador.consumir(ctx, camada, chave)
+            if not consumo.permitido:
                 logger.info("motor nativo: rate limit tenant=%s camada=%s", ctx.tenant_id, camada)
                 return RespostaAtendimento(
-                    mensagem_fixa(ChaveMensagem.LIMITE, idioma_atual), idioma_atual, degradada=True
+                    mensagem_fixa(ChaveMensagem.LIMITE, idioma_atual),
+                    idioma_atual,
+                    degradada=True,
+                    codigo=CodigoResposta.LIMITE,
+                    retry_after_s=consumo.retry_after_s,
                 )
 
         idioma_sessao = resolver_idioma(texto, estado.idioma, config.idiomas_suportados)
@@ -192,7 +208,7 @@ class AgenteNativo:
             if desfecho.texto is not None:
                 historico = (*estado.historico, *turno.novas)
                 await self._gravar(ctx, sessao_id, historico, idioma_sessao)
-                return self._resposta(desfecho.texto, idioma, turno, degradada=False)
+                return self._resposta(desfecho.texto, idioma, turno, degradada=False, codigo=None)
             falha = desfecho.falha or ChaveMensagem.ERRO
             logger.warning("motor nativo: resposta degradada tenant=%s motivo=%s", ctx.tenant_id, falha.value)
 
@@ -203,7 +219,9 @@ class AgenteNativo:
             MensagemLLM(PapelMensagem.ASSISTANT, fixa),
         )
         await self._gravar(ctx, sessao_id, historico, idioma_sessao)
-        return self._resposta(fixa, idioma, turno, degradada=True)
+        return self._resposta(
+            fixa, idioma, turno, degradada=True, codigo=_CODIGO_DA_FALHA.get(falha, CodigoResposta.ERRO)
+        )
 
     async def _executar_turno(
         self,
@@ -297,7 +315,9 @@ class AgenteNativo:
         await self._sessoes.salvar(ctx, sessao_id, estado, self._ttl_sessao_s)
 
     @staticmethod
-    def _resposta(texto: str, idioma: Idioma, turno: _Turno, *, degradada: bool) -> RespostaAtendimento:
+    def _resposta(
+        texto: str, idioma: Idioma, turno: _Turno, *, degradada: bool, codigo: CodigoResposta | None
+    ) -> RespostaAtendimento:
         return RespostaAtendimento(
             texto=texto,
             idioma=idioma,
@@ -305,4 +325,5 @@ class AgenteNativo:
             provedor=turno.provedor,
             tools_chamadas=tuple(turno.tools),
             degradada=degradada,
+            codigo=codigo,
         )

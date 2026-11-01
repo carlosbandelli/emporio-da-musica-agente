@@ -12,7 +12,7 @@ Desafio técnico Artefact, AI Engineer 2026.
 O idioma padrão das respostas é o português do Brasil. O inglês funciona com `--idioma en-US` e com a detecção de
 idioma (seção 4.10).
 
-**Estado da entrega:** o núcleo (Fase 1) roda no terminal com LLM real. A infraestrutura da Fase 2 (API, Postgres,
+**Estado da entrega:** o núcleo (Fase 1) roda no terminal com LLM real. A API (task 2.1) já roda local; o restante da Fase 2 (Postgres,
 Redis, observabilidade, RBAC, deploy) não está implementada. Veja a seção 8.
 
 ---
@@ -95,8 +95,10 @@ uv run emporio chat
 ### Observações
 
 - Rode os comandos na raiz do repositório. O `.env` e a pasta `config/` são lidos a partir da pasta atual.
-- O caminho 2 (Docker) não sobe hoje. O `Dockerfile` e o `docker-compose.yml` existem, mas o container inicia
-  `emporio.adaptadores.api.app:app`, que é da Fase 2 e ainda não existe. Os artefatos de `deploy/` não foram exercitados.
+- A API (task 2.1) roda local: `uv run uvicorn emporio.adaptadores.api.app:app --port 8000` (`GET /health`, `GET /ready`,
+  `POST /v1/chat` com `X-Tenant-ID` ou subdomínio do `Host`; `Accept-Language` escolhe pt-BR ou en-US). Sem chave de LLM ela
+  sobe, mas `/ready` e `/v1/chat` devolvem 503. O caminho 2 (Docker) ainda depende da task 2.8; os artefatos de `deploy/`
+  não foram exercitados.
 
 ---
 
@@ -107,6 +109,7 @@ uv run emporio chat
 | `uv run emporio --help` | lista os comandos |
 | `uv run emporio versao` | mostra a versão instalada |
 | `uv run emporio chat [--tenant ID] [--idioma pt-BR ou en-US] [--gravar ARQUIVO.md]` | conversa no terminal, no mesmo processo |
+| `uv run emporio chat --api http://localhost:8000 [--tenant ID]` | mesma conversa, mas cada mensagem vai para `POST /v1/chat` da API |
 | `uv run emporio diagnostico [--tenant ID]` | estado da configuração; não mostra chaves |
 | `uv run pytest` | testes (sem chave; os `llm_real` ficam pulados) |
 | `uv run pytest --cov=src/emporio -q` | testes com cobertura |
@@ -117,7 +120,7 @@ uv run emporio chat
 
 No PowerShell, o teste com LLM real fica: `$env:EMPORIO_LLM_REAL=1; uv run pytest tests/e2e/test_llm_real.py -v`.
 
-A CLI não tem `emporio token` nem `--api URL`: são da Fase 2.
+A CLI ainda não tem `emporio token`: é da Fase 2.
 
 ---
 
@@ -377,7 +380,6 @@ o parcelamento, mas omitiu o PIX que o cliente tinha pedido.
 A Fase 2 faz parte do desenho, mas não foi entregue. Os arquivos de `deploy/`, o `Dockerfile`, o `docker-compose.yml` e o
 workflow de CI existem, mas não foram exercitados:
 
-- API FastAPI (`POST /v1/chat`, `/health`, `/ready`) e o modo remoto da CLI (`--api URL`);
 - Postgres com um schema por tenant, migrações e seed; Redis para sessão, rate limit e cache;
 - rate limit em camadas (sessão, usuário, tenant, provedor) e rate limit por IP na borda;
 - observabilidade: as métricas de `docs/deploy.md` §6, traces e logs JSON;

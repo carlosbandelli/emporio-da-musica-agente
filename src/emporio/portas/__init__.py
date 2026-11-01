@@ -30,6 +30,7 @@ from emporio.portas.llm import (
     UsoTokens,
 )
 from emporio.portas.motor import (
+    CodigoResposta,
     Diagnostico,
     DiagnosticoInfo,
     MensagemCliente,
@@ -44,6 +45,7 @@ __all__ = [
     "ChamadaTool",
     "CircuitoStore",
     "Clientes",
+    "CodigoResposta",
     "ConfigTenant",
     "ConteudoBruto",
     "DefinicaoTool",

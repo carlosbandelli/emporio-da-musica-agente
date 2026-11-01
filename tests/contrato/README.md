@@ -1,7 +1,7 @@
 # Suíte de contrato da porta `MotorDeAtendimento`
 
 Garante que **todo** motor de atendimento cumpre os invariantes I1-I8 de `docs/arquitetura.md` §3.2. Cada teste de
-`test_motor_atendimento.py` roda uma vez por motor registrado; hoje só `nativo` (`AgenteNativo`). Na Fase 2 entra
+`test_motor_atendimento.py` roda uma vez por motor registrado; hoje `nativo` (`AgenteNativo`) e `api` (o mesmo `AgenteNativo` através de `POST /v1/chat`, via `MotorViaApi` em `motor_via_api.py`, por ASGI em memória). Na Fase 2 entra
 `n8n` (`AgenteN8n`, task 2.7), que precisa passar na mesma suíte sem mudar nenhum teste.
 
 ```
@@ -15,6 +15,7 @@ Nenhum teste usa rede nem `.env`: o LLM é o `LLMFalso` roteirizável e os dados
 | Arquivo | Papel |
 |---|---|
 | `kit.py` | `KitMotor`, `EspiaoTools`, o tipo `FabricaMotor` e os tenants de teste (`tenants_ab`). |
+| `motor_via_api.py` | `MotorViaApi`: implementa a porta chamando a API FastAPI (usado pela fábrica `api`). |
 | `fabricas.py` | Fábricas dos motores e o registro `MOTORES` (nome → fábrica). **Único arquivo que muda para um motor novo.** |
 | `conftest.py` | Fixture `motor_factory`, parametrizada por `MOTORES`. |
 | `invariantes.py` | `verificar_i1` ... `verificar_i8`: a lógica de cada invariante, só pela porta. |
@@ -74,3 +75,5 @@ tool) e roda `verificar_i4` e `verificar_i6` contra ele, exigindo `AssertionErro
 - I3 e I8 usam o conteúdo do prompt (nome da loja) e os contatos das mensagens fixas como sinal de configuração; um
   motor que não coloque o nome da loja no prompt do LLM falha I3 e deve ajustar a fábrica ou o prompt.
 - I5 mede só que o motor volta em menos de 3 s com deadline de 0,05 s (sem relógio falso), com folga para máquinas lentas.
+
+- **Fábrica `api`.** Roda I1-I8 sem nenhuma exceção: o cliente envia `X-Tenant-ID` e o idioma do canal no corpo, e reconstrói a `RespostaAtendimento` do JSON (inclusive `codigo` e `retry_after_s`). Erros de borda (400/404/422) viram `RuntimeError` no teste, porque a suíte só envia requisições válidas.
