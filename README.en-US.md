@@ -4,17 +4,18 @@
 
 Text-based customer service agent for **Empório da Música**, a fictional musical instrument store in Campo Grande/MS,
 Brazil. The assistant is called **Sônia**. She answers questions about price, stock, orders, opening hours, address,
-installments, returns, warranty and shipping. Data comes from tools (CSV files), and rules come from the store's policy
-manual. The store does not sell accessories (strings, picks, cables, cases, pedals, amplifiers): Sônia redirects those
-requests.
+installments, returns, warranty and shipping. Data comes from tools (CSV files or Postgres), and rules come from the
+store's policy manual. The store does not sell accessories (strings, picks, cables, cases, pedals, amplifiers): Sônia
+redirects those requests.
 
 Artefact technical challenge, AI Engineer 2026.
 
 The default language for answers is Brazilian Portuguese. English works with `--idioma en-US` and with language
 detection (section 4.10).
 
-**Delivery status:** the core (Phase 1) runs in the terminal with a real LLM. The API (task 2.1) already runs locally; the rest of Phase 2 (Postgres,
-Redis, observability, RBAC, deploy) is not implemented. See section 8.
+**Delivery status:** Phase 1 (core) and Phase 2 (API, Postgres, Redis, observability, RBAC, tools over HTTP, n8n engine,
+Docker Compose and CI) are implemented. Left out: a real payment gateway (only the simulated one), the WhatsApp channel,
+Grafana, Sentry, and running the n8n workflow on a real n8n. See section 8.
 
 ---
 
@@ -24,8 +25,8 @@ You need [git](https://git-scm.com/) and [uv](https://docs.astral.sh/uv/). uv in
 
 | Path | Prerequisites | Commands | What it shows | Status |
 |---|---|---|---|---|
-| **1. Quick** (default) | git, uv and one LLM key | `uv sync`, `.env`, `uv run emporio chat` | the full agent, on the CSV files, without Docker | works (core) |
-| **2. Full** | + Docker | `docker compose up -d` | replicas, Traefik, schema per tenant, rate limit, dashboards | works (smoke run) |
+| **1. Quick** (default) | git, uv and one LLM key | `uv sync`, `.env`, `uv run emporio chat` | the full agent, on the CSV files, without Docker | works |
+| **2. Full** | + Docker | `docker compose up -d` | replicas, Traefik, schema per tenant, rate limit, Prometheus | works (smoke run) |
 | **3. No run** | none | read `exemplos/`; `uv run pytest` | recorded conversations; rules tested with a simulated LLM, no key | works |
 
 ### Path 1: step by step
@@ -77,8 +78,8 @@ uv run emporio diagnostico
 uv run emporio chat
 ```
 
-- `diagnostico` shows which LLM providers have a key (names only), the engine, the tenant, the loaded data, the manual
-  and the reference date. It never shows key values.
+- `diagnostico` shows which LLM providers have a key (names only), the engine, the tenant, the loaded data, the manual,
+  the reference date, and the Postgres and Redis configuration. It never shows key values.
 - `chat` opens the conversation. Type `sair` (or Ctrl+C) to quit.
 
 **Optional:**
@@ -87,6 +88,7 @@ uv run emporio chat
   uncomment this line in `.env`: `DATA_REFERENCIA=2026-03-10T15:00:00-04:00`.
 - Chat in English: `uv run emporio chat --idioma en-US`.
 - Save the conversation as Markdown: `uv run emporio chat --gravar minha-conversa.md`.
+- Chat with the API instead of the local engine: `uv run emporio chat --api http://localhost:8000` (see "Notes").
 
 ### No key at all
 
@@ -97,9 +99,20 @@ uv run emporio chat
 
 - Run the commands from the repository root. The `.env` file and the `config/` folder are read from the current
   folder.
-- The API (task 2.1) runs locally: `uv run uvicorn emporio.adaptadores.api.app:app --port 8000` (`GET /health`,
-  `GET /ready`, `POST /v1/chat` with `X-Tenant-ID` or the `Host` subdomain; `Accept-Language` picks pt-BR or en-US).
-  Without an LLM key it starts, but `/ready` and `/v1/chat` return 503. Path 2 (Docker) is in the next section.
+- **API.** Runs locally, without Docker:
+  `uv run uvicorn emporio.adaptadores.api.app:app --port 8000`.
+  - `POST /v1/chat`: one customer message. The tenant comes from the `X-Tenant-ID` header or the subdomain of `Host`.
+    `Accept-Language` picks pt-BR or en-US. With the usage limit exceeded, it answers 429 with `Retry-After`.
+  - `GET /health` (liveness) and `GET /ready` (503 without an LLM key).
+  - `GET /metrics` (port 8000; the Ingress does not expose it).
+  - `GET /v1/tools` and `POST /v1/tools/{nome}` (permission `tools:usar`), and `/v1/admin/...` (RBAC, section 4.11).
+  - Without an LLM key, the API starts, but `/ready` and `/v1/chat` return 503.
+- **Postgres and Redis (optional).** Without `DATABASE_URL` and `REDIS_URL`, state stays in process memory. With them:
+  - `DATABASE_URL` enables Postgres, with one schema per tenant. Before starting the API or `chat`, run the migration
+    with the CSV seed: `uv run python -m emporio.adaptadores.db.migrar`.
+  - `REDIS_URL` enables Redis for sessions, rate limit and the catalog cache.
+- **Token for the API with RBAC.** `uv run emporio token --tenant emporio --papel gerente` prints a JWT. It needs
+  `JWT_SECRET` with at least 32 bytes in `.env`. Roles: `cliente`, `atendente`, `gerente` and `admin_plataforma`.
 
 ### Path 2: Docker (Traefik, 3 replicas, Postgres, Redis, Prometheus)
 
@@ -147,16 +160,17 @@ Notes for path 2:
 | `uv run emporio chat [--tenant ID] [--idioma pt-BR or en-US] [--gravar ARQUIVO.md]` | terminal conversation, in the same process |
 | `uv run emporio chat --api http://localhost:8000 [--tenant ID]` | same conversation, but each message goes to the API's `POST /v1/chat` |
 | `uv run emporio diagnostico [--tenant ID]` | configuration status; never shows keys |
+| `uv run emporio token --tenant ID --papel PAPEL [--sub ID] [--expira-em S]` | issues a local JWT (needs `JWT_SECRET`); prints only the token |
+| `uv run python -m emporio.adaptadores.db.migrar` | migrates and seeds Postgres per tenant (needs `DATABASE_URL`) |
+| `uv run uvicorn emporio.adaptadores.api.app:app --port 8000` | starts the API |
 | `uv run pytest` | tests (no key needed; `llm_real` tests are skipped) |
 | `uv run pytest --cov=src/emporio -q` | tests with coverage |
-| `uv run lint-imports` | dependency rules C1 to C5 (12 contracts) |
+| `uv run lint-imports` | dependency rules C1 to C5 (14 contracts) |
 | `uv run ruff check . && uv run ruff format --check .` | lint and formatting |
 | `uv run mypy src` | type checking (strict in `src/`) |
 | `EMPORIO_LLM_REAL=1 uv run pytest tests/e2e/test_llm_real.py -v` | tests with a real LLM (needs a key and uses quota) |
 
 In PowerShell, the real-LLM test command is: `$env:EMPORIO_LLM_REAL=1; uv run pytest tests/e2e/test_llm_real.py -v`.
-
-The CLI does not have `emporio token` yet: it belongs to Phase 2.
 
 ---
 
@@ -165,17 +179,27 @@ The CLI does not have `emporio token` yet: it belongs to Phase 2.
 ```
 src/emporio/
   modulos/        pure business rules, no I/O and no SDK: catalogo, comercial, pedidos, politicas, atendimento, comum
-  portas/         contracts (Protocol) and shared types (TenantContext, MotorDeAtendimento, LLMProvider...)
-  adaptadores/    cli, motor/nativo, llm (groq, gemini, claude, falso), csv, memoria, relogio
+  portas/         contracts (Protocol) and shared types: engine, LLM, repositories, state, identity, payment...
+  adaptadores/    cli, api, motor (nativo, n8n, comum), llm (groq, gemini, claude, falso), csv, memoria, redis, db,
+                  identidade, observabilidade, pagamento, relogio
   configuracao/   Settings (reads .env) and tenant loading
   composicao.py   the only place that connects ports to adapters
 config/           tenants.yaml and the policy manual in Markdown (config/tenants/emporio/politicas.md)
 data/             store CSV files and the original manual PDF
-docs/             architecture, assumptions, payment (design) and deploy
+docs/             architecture, assumptions, payment (design), deploy and diagrams
+deploy/           Docker (Traefik, Prometheus, starter Grafana), n8n (example workflow) and Kubernetes (example)
 exemplos/         3 conversations recorded with a real LLM
-tests/            unit, contract (I1 to I8) and end-to-end (e2e) tests
-deploy/           Phase 2 artifacts (not run)
+tests/            unit, contract (I1 to I8 and payment) and end-to-end (e2e) tests
 ```
+
+### Diagrams
+
+Mermaid diagrams, in [docs/diagramas/](docs/diagramas/README.md) (in Portuguese):
+
+- [01-arquitetura.md](docs/diagramas/01-arquitetura.md): components and layers.
+- [02-sequencia-mensagem.md](docs/diagramas/02-sequencia-mensagem.md): the path of one message.
+- [03-erd.md](docs/diagramas/03-erd.md): tables of the per-tenant schema.
+- [04-deploy.md](docs/diagramas/04-deploy.md): deployment.
 
 ---
 
@@ -185,8 +209,11 @@ deploy/           Phase 2 artifacts (not run)
 
 - **Python 3.12** (`.python-version`) and **uv** with `uv.lock`. The brief only requires Python. uv installs the
   interpreter and resolves dependencies the same way on Windows, macOS and Linux.
-- The project declares 11 runtime dependencies: the SDKs for Groq, Gemini and Anthropic, `tenacity` (retry), `pydantic`
-  and `pydantic-settings`, `typer` (CLI), `babel` and `holidays` (dates and holidays), `pyyaml` and `tzdata`.
+- The project declares 23 runtime dependencies. Phase 1 used 11: the SDKs for Groq, Gemini and Anthropic, `tenacity`
+  (retry), `pydantic` and `pydantic-settings`, `typer` (CLI), `babel` and `holidays` (dates and holidays), `pyyaml` and
+  `tzdata`. Phase 2 added FastAPI and uvicorn (API), SQLAlchemy, psycopg and Alembic (Postgres), `redis`, PyJWT, `httpx`
+  (the remote CLI client), `prometheus-client` and OpenTelemetry (optional).
+- Sentry is not a dependency and is not used (assumption #106); `SENTRY_DSN` in `Settings` is reserved for the future improvement.
 
 ### 4.2 Agent framework: own loop, no LangChain or LangGraph
 
@@ -198,9 +225,11 @@ I wrote the agentic loop myself (route, call the LLM, run tools, repeat) instead
   (architecture §5.2), are custom logic. A generic library would need the same adaptation.
 - **Testable tools.** The tools are pure Python use cases (`modulos/*/aplicacao.py`). The engine only calls them, and
   tests run them without an LLM.
-- **Cost.** The engine loop (`adaptadores/motor/nativo/agente.py`) is a little over 300 lines, and the project maintains
-  it with no external orchestration dependency. In return, there are no ready-made graph or memory features, as in a
-  framework. If the flow grows into several cooperating agents, this decision should be revisited.
+- **Cost.** The native engine loop (`adaptadores/motor/nativo/agente.py`) is about 350 lines, and the project
+  maintains it with no external orchestration dependency. In return, there are no ready-made graph or memory features,
+  as in a framework. If the flow grows into several cooperating agents, this decision should be revisited.
+- **Phase 2.** The `n8n` engine runs the workflow in n8n, but the decision stays in Python: validation, history, guard
+  and fixed messages remain in the code (assumption #160). n8n only orchestrates the tool calls.
 
 ### 4.3 LLM: three providers, routed by complexity
 
@@ -243,7 +272,7 @@ Each kind of knowledge uses the technique that gives an exact answer:
 
 | Knowledge | Technique | How |
 |---|---|---|
-| Data: stock, price, promotions, orders | tools (function calling) | exact structured queries on the CSV files; the LLM does not read prices from text |
+| Data: stock, price, promotions, orders | tools (function calling) | exact structured queries on the CSV files (or Postgres); the LLM does not read prices from text |
 | Policies: 8-page manual (v2.1) | CAG (cache-augmented generation) | the whole manual goes in the system prompt, in the cacheable block |
 | Rules with calculations: PIX, installments, shipping, deadlines, hours | Python code (`modulos/*/dominio.py`) | "the LLM decides and writes; the code calculates" |
 
@@ -259,7 +288,7 @@ and versioned (assumption #20). The PDF in `data/` is the source and is not read
 
 Cost: each call uses about 6,000 input tokens, including the manual. The cacheable block is byte-for-byte identical
 across sessions, languages and dates (assumption #42), so the provider's prompt caching works. **I did not measure the
-cache hit rate:** the metrics for it (`emporio_prompt_cache_total`) belong to Phase 2.
+cache hit rate:** the metric for it (`emporio_prompt_cache_total`) exists since Phase 2, but no measurement is published yet.
 
 ### 4.5 Prompt strategy
 
@@ -278,8 +307,9 @@ cache hit rate:** the metrics for it (`emporio_prompt_cache_total`) belong to Ph
 - **Monetary value guard** (assumption #58). Every `R$` in the final answer must come from a tool result in the session,
   from something the customer said, or from the manual. If not, there is one corrective round. If the model insists, the
   answer is replaced by a fixed message without the value.
-- **Tools by role.** The role filter exists in the code, but in Phase 1 all six tools are for customers. Phase 2
-  administrative tools will be added without changing the engine.
+- **Tools by role.** The six tools (`buscar_produtos`, `detalhar_produto`, `simular_pagamento`, `consultar_pedido`,
+  `status_loja` and `registrar_solicitacao`) are available to every role. The role filter is already applied in
+  `GET /v1/tools`, but there is no tool exclusive to attendants or managers yet.
 - **Fixed messages** (error, usage limit, store closed, deadline) come from a translation catalog, not from the LLM. That
   way they work even when every provider is down.
 
@@ -289,22 +319,25 @@ cache hit rate:** the metrics for it (`emporio_prompt_cache_total`) belong to Ph
   `atendimento`) and the shared kernel `comum` (`Dinheiro`). Each package has `dominio.py` (rules) and `aplicacao.py`
   (use cases, the module's public API).
 - **Hexagonal only where there is a real swap.** Ports for the service engine, the LLM providers, the repositories, the
-  state (session, rate limit, circuit) and the clock. Swapping one of them changes only its adapter.
+  state (session, rate limit, circuit), the clock, identity, telemetry and the payment gateway. Swapping one of them
+  changes only its adapter.
 - **Composition root.** `composicao.py` is the only place that creates adapters and reads `Settings`. There are no
   singletons, no `global` and no module-level cache.
-- **Dependency rules C1 to C5**, checked by import-linter (`uv run lint-imports`, 12 contracts). One exception, recorded:
-  the CLI may import the composition root (assumption #65).
+- **Dependency rules C1 to C5**, checked by import-linter (`uv run lint-imports`, 14 contracts). One exception, recorded:
+  the CLI may import the composition root (assumption #65). The API and the CLI do not import adapters (C4); payment
+  follows the same rule (assumption #166).
 - **`MotorDeAtendimento` port contract** (architecture §3.2): `responder(ctx, sessao_id, mensagem)`. The suite in
-  `tests/contrato` tests invariants I1 to I8 for each registered engine. A new engine, such as the Phase 2 `AgenteN8n`,
-  is accepted only if it passes that suite.
+  `tests/contrato` tests invariants I1 to I8 for each registered engine: `nativo`, `api` and `n8n`. A new engine is
+  accepted only if it passes that suite. The suite in `tests/contrato/pagamento` does the same for `GatewayPagamento`.
 
-### 4.7 Interface: CLI
+### 4.7 Interface: CLI and API
 
 - The brief asks for a text-based customer service agent, not a graphical interface. The CLI runs without a server,
-  without Docker and without a browser. It calls the engine through the same port that the API will use.
+  without Docker and without a browser. It calls the engine through the same port that the API uses.
 - The `--gravar` option saves the conversation as Markdown, turn by turn. The examples were generated this way.
-- Trade-off: there is no visual chat history and no real channel (WhatsApp). A web frontend was not requested and is not
-  in the plan.
+- The API (FastAPI) is the same entry point for `chat --api`, for the n8n engine and for the tools over HTTP. A web
+  frontend was not requested and is not in the plan.
+- Trade-off: there is no visual chat history and no real channel (WhatsApp).
 
 ### 4.8 History and session
 
@@ -315,7 +348,10 @@ cache hit rate:** the metrics for it (`emporio_prompt_cache_total`) belong to Ph
   a 400 error (assumption #47).
 - **Trimming.** Above 40 messages, the oldest whole turns are removed. A `tool_use` never stays without its matching
   `tool_result`: if a turn fails midway, the session keeps only the customer's message and the fixed answer.
-- **Phase 2:** Redis, with a TTL, to share sessions between replicas (architecture §5.3).
+- **Phase 2 (with `REDIS_URL`):** the session lives in Redis, with a TTL, and is shared by all replicas. If Redis goes
+  down, the session is not saved and the conversation continues without history (fail-open). The rate limit uses a local
+  emergency bucket, and the catalog cache is skipped. A 300 ms timeout and a 5 s pause keep each call from waiting on a
+  dead Redis (architecture §5.2).
 
 ### 4.9 Data cleaning
 
@@ -338,6 +374,9 @@ The CSV files have real problems, and each one has a documented treatment:
 and a failed check always returns the same generic answer, without revealing anything about the order (assumptions #15
 and #40).
 
+With `DATABASE_URL`, the Postgres seed uses the same CSV files and the same treatment. The tables are `categorias`,
+`produtos`, `promocoes`, `clientes`, `pedidos`, `itens_pedido` and `solicitacoes`, in one schema per tenant.
+
 ### 4.10 Language and persona
 
 - The language is detected, not asked: a heuristic based on Portuguese and English words. When the message is
@@ -347,11 +386,24 @@ and #40).
 - The persona is the same in both languages. The manual is not translated: the LLM reads the rules in Portuguese and
   answers in the session language.
 
+### 4.11 Phase 2: persistence, API, identity and observability
+
+| Topic | Decision | Reason |
+|---|---|---|
+| Persistence | Postgres with one schema per tenant (`DATABASE_URL`), SQLAlchemy and Alembic per schema | isolation per tenant without duplicated code. A connection without a tenant cannot see store tables |
+| Migrations | `migrar` runs Alembic in each schema, under a Postgres advisory lock | concurrent replicas or processes do not migrate at the same time |
+| Shared state | Redis: session with TTL, rate limit in Lua, catalog cache without stock | state is shared by all replicas; the Lua script runs atomically on the server |
+| API | FastAPI; tenant by header or subdomain; 429 with `Retry-After` | a single entry point for the remote CLI, n8n and the HTTP tools |
+| Identity | local JWT, signed with `JWT_SECRET`; roles mapped to permissions; `/v1/admin/solicitacoes` and `/v1/admin/config` | no external identity provider in the challenge; the `ProvedorIdentidade` port can take an IdP later |
+| Observability | Prometheus metrics from the contract (`docs/deploy.md` §6), optional OpenTelemetry, JSON logs with PII masked | the metrics contract is what a Grafana would consume |
+| Payment | `GatewayPagamento` port and `FakeGatewayPagamento`, with a contract suite | a real gateway can replace it without changing the chat (assumption #166) |
+| n8n engine | `MOTOR_ATENDIMENTO=n8n`, webhook; Python keeps validation, guard and history | n8n orchestrates; the rules stay tested in Python (assumptions #160 and #164) |
+
 ---
 
 ## 5. Assumptions (ambiguities in the brief)
 
-The brief asks that, when something is ambiguous, a reasonable interpretation is assumed and documented. There are 67
+The brief asks that, when something is ambiguous, a reasonable interpretation is assumed and documented. There are 166
 assumptions, each with its decision and reason, in [docs/premissas.md](docs/premissas.md) (in Portuguese). The general
 rule is: the more specific rule wins, and when in doubt the agent does not invent, it refers the case to the team.
 
@@ -374,21 +426,24 @@ Some of the most visible ones:
 | 31 | Combined payment | only above R$ 2,000.00 (R$ 2,000.00 does not qualify); no PIX discount inside a combined plan |
 | 36 | Counting return deadlines | the reference day is day 0 (receipt; for defects, the purchase); day 7 still counts, day 8 does not |
 | 58 | Unverified monetary value in the answer | one corrective round; if the model insists, a message without the value |
+| 106 | Sentry and Grafana | out of this delivery by the user's decision; left as future improvements |
+| 166 | Payment | port and fake in hexagonal form; no real gateway |
 
 ---
 
 ## 6. Quality and tests
 
-- **Tests:** `uv run pytest -q` gives about 729 passed and 3 skipped (the `llm_real` tests, without a key). Coverage of
-  `src/emporio`: about 98%. Numbers from the last gate run, on 2026-11-01.
-- **Static gate:** ruff (lint and formatting), mypy in strict mode on `src/`, and import-linter with 12 contracts, all
-  kept.
-- **Three test layers:**
+- **Tests:** `uv run pytest -q` gives 1246 passed and 3 skipped (the `llm_real` tests, without a key).
+- **Coverage** of `src/emporio`: 98%.
+- **Static gate:** ruff (lint and formatting), mypy in strict mode on `src/`, and import-linter with 14 contracts (C1 to C5).
+- **Four test layers:**
   - unit tests per module and adapter, with `LLMFalso` (scripted answers) and the real CSV files;
-  - contract tests for the `MotorDeAtendimento` port (I1 to I8), parametrized by the registered engines (`tests/contrato`);
+  - contract tests for the `MotorDeAtendimento` port (I1 to I8), parametrized by the engines `nativo`, `api` and `n8n`
+    (`tests/contrato`), and the contract for `GatewayPagamento` (`tests/contrato/pagamento`);
   - end-to-end tests (`tests/e2e/test_cenarios.py`): brief and rule scenarios, with real CSV data and a scripted LLM. One
     of them is "violões até R$ 1,000" (guitars up to R$ 1,000), another is "me arrependi, posso devolver?" (I regret the
-    purchase, can I return it?), with the order verified.
+    purchase, can I return it?), with the order verified;
+  - integration with real Postgres and Redis in CI (GitHub Actions services).
 - **Real-LLM tests** are in `tests/e2e/test_llm_real.py`, marked `llm_real`. They only run with `EMPORIO_LLM_REAL=1` and
   a key. Minimal real calls showed two problems that the fakes did not catch: the `gemini-flash-latest` alias (504) and
   the Groq tokens-per-minute limit.
@@ -409,28 +464,36 @@ header. Each answer has a line `level · provider · tools called`. Details in [
 
 The values quoted match the CSV files, and the logic behind them is covered by tests in `tests/e2e` (details in
 [exemplos/README.md](exemplos/README.md)). A limitation seen in the recording: in example 01, the answer to the second
-question gave the installments but left out the PIX price the customer had asked for.
+question gave the installments but left out the PIX price the customer had asked for. The recordings are from Phase 1 and
+were not redone in Phase 2.
 
 ---
 
 ## 8. Limitations and next steps
 
-### 8.1 Not implemented (Phase 2 and architecture §13)
+### 8.1 Out of this delivery
 
-Phase 2 is part of the design, but it was not delivered. The files in `deploy/`, the `Dockerfile` and `docker-compose.yml`
-were run (section 1, path 2); Kubernetes and the pipeline deploy were not:
+Implemented in Phase 2: the items in section 4.11, the `docker-compose.yml` with Traefik, three replicas, Postgres, Redis
+and Prometheus (section 1, path 2), and the CI. Left out:
 
-- Postgres with one schema per tenant, migrations and seed; Redis for sessions, rate limit and cache;
-- layered rate limit (session, user, tenant, provider) and rate limit per IP at the edge;
-- observability: the metrics in `docs/deploy.md` §6, traces and JSON logs;
-- RBAC with JWT, roles and `emporio token`;
-- tools over HTTP (`/v1/tools/*`) and the `AgenteN8n` engine;
-- a fake payment gateway (design in `docs/pagamento.md`);
-- Traefik, Kubernetes and the deploy stage of the pipeline.
+- **Real payment gateway.** Only `FakeGatewayPagamento` exists, and it marks every charge as a simulation. The design is
+  in `docs/pagamento.md` (in Portuguese).
+- **WhatsApp channel.** The API is the entry point; there is no WhatsApp webhook.
+- **Grafana and Sentry.** Not in the compose file. The starter dashboard is in `deploy/observabilidade/grafana/`, with no
+  service. See section 8.3.
+- **OTel Collector, Loki and Alloy.** An optional compose profile, not enabled by default.
+- **Kubernetes.** The manifests in `deploy/k8s/` are an example and were not exercised. The pipeline deploy only runs with
+  `DEPLOY_ENABLED=true`, and there is no cluster in this delivery.
+- **n8n workflow.** `deploy/n8n/workflow-atendimento.json` was not run on a real n8n (assumption #164).
 
 ### 8.2 Known limitations
 
-- **Local mode.** Session, rate limit and circuit state are in memory, per process. History is lost when `chat` exits.
+- **Local mode.** Without `DATABASE_URL` and `REDIS_URL`, session, rate limit and circuit state are in memory, per process.
+  History is lost when `chat` exits.
+- **Redis down.** The conversation continues without history (fail-open, section 4.8). No call fails because of Redis.
+- **Configuration edited in memory only** (assumption #123). `PUT /v1/admin/config` changes the process configuration: it
+  is lost on restart and does not reach the other replicas.
+- **Docker build with an accent in the path** (assumption #135). See section 1, path 2.
 - **The guard only checks monetary values** (assumption #58). Stock and order status depend on the prompt instruction and
   on calling the tool, not on a deterministic check.
 - **Language by keywords** (assumption #57). Short and ambiguous phrases fall back to the channel language.
@@ -456,15 +519,18 @@ were run (section 1, path 2); Kubernetes and the pipeline deploy were not:
 In priority order:
 
 1. Validate the complex level with a Claude key that has credit, and record the examples again with it.
-2. Implement the Phase 2 API and data layer: FastAPI, Postgres with one schema per tenant, and Redis. Then run Docker
-   Compose end to end.
-3. Deterministic checks for stock and order status, in addition to monetary values.
-4. Observability as in `docs/deploy.md` §6: metrics, traces and cost per tenant.
-5. Real shipping (Correios and Jadlog), with weight and dimensions on products, and a real delivery date.
-6. A real payment gateway adapter (`docs/pagamento.md`).
-7. A WhatsApp channel: a webhook that calls `POST /v1/chat`.
-8. Audio and photo input (OCR): invoice, defect, proof of payment. See architecture §13.1.
-9. The `AgenteN8n` engine, passing the same contract suite.
+2. Deterministic checks for stock and order status, in addition to monetary values.
+3. A real payment gateway (`docs/pagamento.md`), with the production retry, circuit and bulkhead (assumption #154).
+4. Grafana and Sentry, which were not part of this delivery:
+   - **Grafana:** dashboards over the Prometheus metrics (p95 latency per provider, fallback and degradation rate, open
+     circuit, tokens and cost per tenant) and alerts on them.
+   - **Sentry:** group exceptions with stack trace and context, alert on new errors and regressions, and track releases.
+5. Run the n8n workflow on a real n8n. Check the value guard against the results the API records per session, instead of
+   trusting the workflow's report (assumption #163).
+6. Persist the editable configuration in Postgres, instead of only in memory (assumption #123).
+7. Real shipping (Correios and Jadlog), with weight and dimensions on products, and a real delivery date.
+8. A WhatsApp channel: a webhook that calls `POST /v1/chat`.
+9. Audio and photo input (OCR): invoice, defect, proof of payment. See architecture §13.1.
 10. Real-LLM tests in CI, with a cost limit per run.
 
 ---
@@ -488,19 +554,33 @@ I used Claude Code as the orchestrator for the whole project. The workflow was:
    | 1.11, 1.13 (contract suite, end-to-end scenarios) | `test-automator` |
    | 1.12 (CLI) | `cli-developer` |
    | 1.14 (recording the examples with a real LLM) | the orchestrator itself |
-   | 1.15 (README) | `technical-writer`, reviewed by `content-quality-editor` |
+   | 1.15 (Phase 1 README) | `technical-writer`, reviewed by `content-quality-editor` |
+   | 2.1 and 2.6 (FastAPI API, tools over HTTP) | `fastapi-developer` |
+   | 2.2 (Postgres, schema per tenant, migrations) | `postgres-pro` |
+   | 2.3 (Redis: session, rate limit, cache) | `backend-developer` |
+   | 2.4 (observability: metrics, OpenTelemetry, logs) | `sre-engineer` |
+   | 2.5 (RBAC, JWT and admin endpoints) | `security-engineer` |
+   | 2.7 (n8n engine and contract suite) | `llm-architect` |
+   | 2.8 (Docker Compose and CI) | `devops-engineer` |
+   | 2.9 (payment in hexagonal form) | `fintech-engineer` |
+   | 3.0 (diagrams) | `documentation-engineer` |
+   | Phase 2 README | `technical-writer` |
 3. **Review and gate.** For each delivery, the orchestrator reviewed the code, ran ruff, mypy, import-linter and pytest,
    recorded new assumptions, and made one commit per task, linked to the issue on the GitHub Project.
-4. **Code graph.** When closing each Story, I used code-review-graph to measure impact and check rules C1 to C5. Records
-   in `Plans.md`: S1.A with 118 nodes and 462 edges; S1.B with 610 nodes and 4,053 edges; S1.C with 692 nodes and 6,550
-   edges.
-5. **Human decisions along the way.** Four points changed the direction, and I made each of them, not the assistant:
+4. **Code graph.** When closing each Story and each Epic, I used code-review-graph to measure impact and check rules C1
+   to C5. Records in `Plans.md`: S1.A with 118 nodes and 462 edges; S1.B with 610 nodes and 4,053 edges; S1.C with 692 nodes
+   and 6,550 edges; Epic E2 with 2,209 nodes and 15,682 edges (commit `88161bc`).
+5. **Human decisions along the way.** These changed the direction, and I made each of them, not the assistant:
    - open the provider's circuit immediately when credit runs out (assumption #53);
    - exponential backoff with jitter in the circuit breaker, instead of a fixed wait (assumption #54);
    - spend the minimum number of tokens on real-LLM tests;
-   - record the examples without Claude, because the account had no credit (assumption #66).
+   - record the examples without Claude, because the account had no credit (assumption #66);
+   - in Phase 2, leave Grafana and Sentry out of this delivery (assumption #106);
+   - payment in hexagonal form, with the fake as the only implementation (assumption #166).
 6. **Real tests.** The fakes passed, but real calls found that the `gemini-flash-latest` alias returned 504 (fixed in
    commit `ca35553`), and the Groq limit of 8,000 tokens per minute (assumption #67).
+7. **The CI found a real defect.** The first CI run on GitHub, with Postgres as a service, showed that a connection
+   without a tenant could see the tables of a store. The isolation defect was fixed in commit `a4aa51a`, and CI is green.
 
 Limits of the process: the assistant wrote code and text, including this README, but product decisions and assumptions
 went through human review. The test and coverage numbers in section 6 come from the last gate run.
