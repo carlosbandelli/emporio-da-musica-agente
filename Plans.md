@@ -183,3 +183,7 @@ Destino: `docs/arquitetura.md` e `docs/premissas.md`.
 - 事項: external-send — baixar e instalar a skill archify (`npx skills ...` / clone de `github.com/tt-a1i/archify`) — **PENDENTE de aprovação**
   理由: gerar os diagramas da task 3.0; código de terceiros executado localmente (cadeia de suprimentos), por isso o instalador é lido antes
   scope: Phase 3 / Task 3.0
+
+## Registro de fechamento de Stories
+
+- **S1.A Fundação** (2026-11-01, `c90ee50`): grafo 118 nós / 462 arestas, 7 comunidades, 1 fluxo; review context risco baixo, 0 nós impactados fora do escopo; 26 lacunas de teste apontadas são Protocols e formas de dados sem lógica (cobertas pelos testes de contrato/adapters nas tasks 1.5–1.11); import-linter 12/12 KEPT.
