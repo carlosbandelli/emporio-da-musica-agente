@@ -94,8 +94,6 @@ uv run emporio chat
 
 ### Observações
 
-- Windows: se o `git clone` falhar com "Filename too long" (pastas de `deploy/` em diretório profundo), rode antes
-  `git config --global core.longpaths true` ou clone numa pasta curta, como `C:\dev`.
 - Rode os comandos na raiz do repositório. O `.env` e a pasta `config/` são lidos a partir da pasta atual.
 - O caminho 2 (Docker) não sobe hoje. O `Dockerfile` e o `docker-compose.yml` existem, mas o container inicia
   `emporio.adaptadores.api.app:app`, que é da Fase 2 e ainda não existe. Os artefatos de `deploy/` não foram exercitados.
@@ -396,7 +394,7 @@ workflow de CI existem, mas não foram exercitados:
 - **Idioma por palavras** (premissa #57). Frases curtas e ambíguas caem no idioma do canal.
 - **Claude não validado com chamada real** (premissa #66, seção 4.3). Groq e Gemini foram validados com uma chamada mínima
   cada.
-- **Limites dos planos grátis** (premissa #67). Só com a chave Groq, turnos com tool podem sair degradados.
+- **Limites dos planos grátis** (premissa #67). Só com a chave Groq, turnos com tool podem sair degradados (confirmado no clone limpo: `docs/verificacao-clone-limpo.md`).
 - **Frete fora de Campo Grande** não tem valor: não há CEP, peso nem dimensões nos dados. Vira cotação registrada
   (premissa #11).
 - **Dados ausentes.** Não há data real de recebimento (premissa #6), nem lista de "venda final" (premissa #8), nem

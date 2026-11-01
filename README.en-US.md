@@ -95,8 +95,6 @@ uv run emporio chat
 
 ### Notes
 
-- Windows: if `git clone` fails with "Filename too long" (`deploy/` folders inside a deep directory), first run
-  `git config --global core.longpaths true` or clone into a short folder such as `C:\dev`.
 - Run the commands from the repository root. The `.env` file and the `config/` folder are read from the current
   folder.
 - Path 2 (Docker) does not start today. The `Dockerfile` and `docker-compose.yml` exist, but the container starts
@@ -402,7 +400,7 @@ and the CI workflow exist, but they have not been run:
 - **Language by keywords** (assumption #57). Short and ambiguous phrases fall back to the channel language.
 - **Claude not validated with a real call** (assumption #66, section 4.3). Groq and Gemini were each validated with one
   minimal call.
-- **Free-tier limits** (assumption #67). With only the Groq key, turns with tools can come back degraded.
+- **Free-tier limits** (assumption #67). With only the Groq key, turns with tools can come back degraded (confirmed on the clean clone: `docs/verificacao-clone-limpo.md`).
 - **Shipping outside Campo Grande** has no price: there is no ZIP code, weight or dimensions in the data. It becomes a
   recorded quote (assumption #11).
 - **Missing data.** There is no real delivery date (assumption #6), no list of "final sale" items (assumption #8), and no
