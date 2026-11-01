@@ -10,6 +10,7 @@ from emporio.adaptadores.llm.resiliencia import PoliticaResiliencia, ProvedorRes
 from emporio.configuracao.settings import Settings
 from emporio.portas.estado import CircuitoStore
 from emporio.portas.llm import LLMProvider
+from emporio.portas.telemetria import Telemetria
 
 POLITICAS_PADRAO: dict[str, PoliticaResiliencia] = {
     "claude": PoliticaResiliencia(max_concorrentes=5),
@@ -25,6 +26,7 @@ def criar_provedores(
     *,
     sleep: Sono = asyncio.sleep,
     relogio_monotonic: RelogioMonotonic = time.monotonic,
+    telemetria: Telemetria | None = None,
 ) -> dict[str, LLMProvider]:
     """Um `ProvedorResiliente` por provedor **com chave** (`settings.provedores_com_chave()`); sem chave, ausente.
 
@@ -34,7 +36,12 @@ def criar_provedores(
     for nome in settings.provedores_com_chave():
         interno = _interno(nome, settings)
         provedores[nome] = ProvedorResiliente(
-            interno, circuito, POLITICAS_PADRAO[nome], sleep=sleep, relogio_monotonic=relogio_monotonic
+            interno,
+            circuito,
+            POLITICAS_PADRAO[nome],
+            sleep=sleep,
+            relogio_monotonic=relogio_monotonic,
+            telemetria=telemetria,
         )
     return provedores
 

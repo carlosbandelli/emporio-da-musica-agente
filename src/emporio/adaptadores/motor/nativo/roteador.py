@@ -23,14 +23,18 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from emporio.portas.llm import (
+    ErroCircuitoAberto,
     ErroLLM,
+    ErroLLMTransitorio,
     ErroPrazoEsgotado,
     LLMProvider,
     MensagemLLM,
     PapelMensagem,
     RequisicaoLLM,
     RespostaLLM,
+    UsoTokens,
 )
+from emporio.portas.telemetria import Telemetria, TelemetriaNula
 
 RelogioMonotonic = Callable[[], float]
 
@@ -61,6 +65,9 @@ TIMEOUTS_PADRAO: Mapping[str, float] = {"groq": 10.0, "gemini": 15.0, "claude": 
 """Timeout por tentativa de cada provedor (arquitetura §5.2). Provedor fora da lista mantém `req.timeout_s`."""
 
 TIMEOUT_CLASSIFICADOR_S = 5.0
+NIVEL_CLASSIFICADOR = "classificador"
+"""Valor do rótulo `nivel` nas métricas das chamadas de classificação."""
+TENANT_DESCONHECIDO = "desconhecido"
 MAX_FALAS_CONTEXTO = 3
 MAX_CARACTERES_FALA = 200
 MAX_CARACTERES_MENSAGEM = 1000
@@ -162,6 +169,7 @@ class Roteador:
         relogio_monotonic: RelogioMonotonic = time.monotonic,
         timeouts: Mapping[str, float] = TIMEOUTS_PADRAO,
         timeout_classificador_s: float = TIMEOUT_CLASSIFICADOR_S,
+        telemetria: Telemetria | None = None,
     ) -> None:
         if not provedores:
             raise ErroConfiguracaoRoteador("o roteador precisa de pelo menos um provedor de LLM")
@@ -169,6 +177,7 @@ class Roteador:
         self._agora = relogio_monotonic
         self._timeouts = dict(timeouts)
         self._timeout_classificador_s = timeout_classificador_s
+        self._telemetria: Telemetria = telemetria if telemetria is not None else TelemetriaNula()
         extras = tuple(n for n in self._provedores if n not in ORDEM_CLASSIFICADOR)
         self._cadeias: dict[Nivel, tuple[str, ...]] = {
             nivel: tuple(n for n in ordem if n in self._provedores) + extras for nivel, ordem in CADEIAS.items()
@@ -192,6 +201,7 @@ class Roteador:
         historico: Sequence[MensagemLLM] = (),
         *,
         prazo_monotonic: float | None = None,
+        tenant_id: str = TENANT_DESCONHECIDO,
     ) -> Nivel | None:
         """Nível da mensagem `texto`; `None` se `precisa_classificar` for falso (nenhuma chamada é feita).
 
@@ -215,11 +225,17 @@ class Roteador:
             max_tokens=16,
             prazo_monotonic=prazo,
         )
+        inicio = time.perf_counter()
         try:
-            async with asyncio.timeout(restante):
-                resposta = await self._provedores[self._classificador].gerar(req)
-        except (ErroLLM, TimeoutError):
+            with self._telemetria.span("llm.classificar", provedor=self._classificador):
+                async with asyncio.timeout(restante):
+                    resposta = await self._provedores[self._classificador].gerar(req)
+        except ErroLLM as erro:
+            self._registrar(tenant_id, self._classificador, NIVEL_CLASSIFICADOR, erro, inicio)
             return Nivel.COMPLEXA
+        except TimeoutError:
+            return Nivel.COMPLEXA  # deadline da mensagem: não é falha do provedor
+        self._registrar_ok(tenant_id, self._classificador, NIVEL_CLASSIFICADOR, resposta.uso, inicio)
         return interpretar_nivel(resposta.texto)
 
     async def gerar(
@@ -228,6 +244,7 @@ class Roteador:
         req: RequisicaoLLM,
         *,
         preferido: str | None = None,
+        tenant_id: str = TENANT_DESCONHECIDO,
     ) -> ResultadoGeracao:
         """Gera pela cadeia do nível; `preferido` (o provedor que já respondeu nesta mensagem) vai à frente.
 
@@ -243,15 +260,35 @@ class Roteador:
             if req.prazo_monotonic is not None and req.prazo_monotonic - self._agora() <= 0:
                 raise ErroPrazoEsgotado(f"prazo esgotado antes de tentar {nome}")
             timeout = self._timeouts.get(nome, req.timeout_s)
+            if tentativas:
+                self._telemetria.llm_fallback(tenant_id, tentativas[-1].provedor, nome)
+            rotulo = str(nivel or Nivel.COMPLEXA)
+            inicio = time.perf_counter()
             try:
-                resposta = await self._provedores[nome].gerar(dataclasses.replace(req, timeout_s=timeout))
+                with self._telemetria.span("llm.gerar", provedor=nome, nivel=rotulo):
+                    resposta = await self._provedores[nome].gerar(dataclasses.replace(req, timeout_s=timeout))
             except ErroPrazoEsgotado:
                 raise
             except ErroLLM as erro:
+                self._registrar(tenant_id, nome, rotulo, erro, inicio)
                 tentativas.append(Tentativa(nome, erro))
                 continue
+            self._registrar_ok(tenant_id, nome, rotulo, resposta.uso, inicio)
+            self._telemetria.prompt_cache(tenant_id, nome, hit=resposta.uso.cache_leitura > 0)
             return ResultadoGeracao(resposta, nivel, nome, tuple(tentativas))
         raise ErroSemProvedor(nivel, tentativas)
+
+    def _registrar_ok(self, tenant_id: str, provedor: str, nivel: str, uso: UsoTokens, inicio: float) -> None:
+        self._telemetria.llm_chamada(tenant_id, provedor, nivel, "ok", duracao_s=time.perf_counter() - inicio, uso=uso)
+
+    def _registrar(self, tenant_id: str, provedor: str, nivel: str, erro: ErroLLM, inicio: float) -> None:
+        if isinstance(erro, ErroCircuitoAberto):
+            resultado = "circuito_aberto"
+        elif isinstance(erro, ErroPrazoEsgotado):
+            return  # o deadline da mensagem acabou: não é falha do provedor
+        else:
+            resultado = "transitorio" if isinstance(erro, ErroLLMTransitorio) else "permanente"
+        self._telemetria.llm_chamada(tenant_id, provedor, nivel, resultado, duracao_s=time.perf_counter() - inicio)
 
     @staticmethod
     def _conteudo_classificacao(texto: str, historico: Sequence[MensagemLLM]) -> str:

@@ -22,6 +22,7 @@ from emporio.portas.llm import (
     RequisicaoLLM,
     RespostaLLM,
 )
+from emporio.portas.telemetria import Telemetria, TelemetriaNula
 
 Sono = Callable[[float], Awaitable[None]]
 RelogioMonotonic = Callable[[], float]
@@ -65,7 +66,9 @@ class ProvedorResiliente:
         *,
         sleep: Sono = asyncio.sleep,
         relogio_monotonic: RelogioMonotonic = time.monotonic,
+        telemetria: Telemetria | None = None,
     ) -> None:
+        self._telemetria: Telemetria = telemetria if telemetria is not None else TelemetriaNula()
         self.interno = interno
         self.politica = politica
         self._circuito = circuito
@@ -117,7 +120,9 @@ class ProvedorResiliente:
         restante = self._restante(req)
         if restante is not None and restante <= 0:
             raise ErroPrazoEsgotado(f"{nome}: prazo esgotado antes da chamada")
-        if await self._circuito.estado(nome) is EstadoCircuito.ABERTO:
+        estado = await self._circuito.estado(nome)
+        self._telemetria.circuito_estado(nome, estado)
+        if estado is EstadoCircuito.ABERTO:
             raise ErroCircuitoAberto(f"{nome}: circuito aberto")
         try:
             await asyncio.wait_for(self._bulkhead.acquire(), timeout=restante)
@@ -138,16 +143,25 @@ class ProvedorResiliente:
         except TimeoutError:
             if limitado_pelo_prazo:
                 raise ErroPrazoEsgotado(f"{nome}: prazo esgotado durante a chamada") from None
-            await self._circuito.registrar_falha(nome, permanente=False)
+            await self._falha(nome, permanente=False)
             raise ErroLLMTransitorio(f"{nome}: timeout de {req.timeout_s:g} s") from None
         except ErroLLMAutenticacao:
-            await self._circuito.registrar_falha(nome, permanente=True)
+            await self._falha(nome, permanente=True)
             raise
         except ErroLLMPermanente:
-            await self._circuito.registrar_sucesso(nome)
+            await self._sucesso(nome)
             raise
         except ErroLLMTransitorio:
-            await self._circuito.registrar_falha(nome, permanente=False)
+            await self._falha(nome, permanente=False)
             raise
-        await self._circuito.registrar_sucesso(nome)
+        await self._sucesso(nome)
         return resposta
+
+    async def _sucesso(self, nome: str) -> None:
+        await self._circuito.registrar_sucesso(nome)
+        self._telemetria.circuito_estado(nome, EstadoCircuito.FECHADO)
+
+    async def _falha(self, nome: str, *, permanente: bool) -> None:
+        await self._circuito.registrar_falha(nome, permanente=permanente)
+        # Logo após registrar a falha o circuito está fechado ou aberto (não expira ainda): ler não reserva sonda.
+        self._telemetria.circuito_estado(nome, await self._circuito.estado(nome))

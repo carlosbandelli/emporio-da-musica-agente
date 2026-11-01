@@ -37,6 +37,7 @@ from emporio.portas.contexto import Idioma, Papel, TenantContext
 from emporio.portas.estado import EstadoSessao, RateLimiter, Relogio, SessaoStore
 from emporio.portas.llm import DefinicaoTool, ErroPrazoEsgotado, MensagemLLM, PapelMensagem, RequisicaoLLM
 from emporio.portas.motor import CodigoResposta, MensagemCliente, RespostaAtendimento
+from emporio.portas.telemetria import Telemetria, TelemetriaNula
 from emporio.portas.tenant import ConfigTenant
 
 logger = logging.getLogger(__name__)
@@ -111,9 +112,11 @@ class AgenteNativo:
         max_iteracoes: int = MAX_ITERACOES_PADRAO,
         ttl_sessao_s: int = TTL_SESSAO_S,
         max_mensagens_historico: int = MAX_MENSAGENS_HISTORICO,
+        telemetria: Telemetria | None = None,
     ) -> None:
         if max_iteracoes < 1:
             raise ValueError("max_iteracoes deve ser pelo menos 1")
+        self._telemetria: Telemetria = telemetria if telemetria is not None else TelemetriaNula()
         self._tenants = dict(tenants)
         self._politicas = dict(politicas)
         self._roteador = roteador
@@ -130,7 +133,8 @@ class AgenteNativo:
     async def responder(self, ctx: TenantContext, sessao_id: str, mensagem: MensagemCliente) -> RespostaAtendimento:
         """Responde a uma mensagem do cliente. Nunca lança exceção (I4)."""
         try:
-            return await self._responder(ctx, sessao_id, mensagem)
+            with self._telemetria.span("chat", tenant_id=ctx.tenant_id):
+                return await self._responder(ctx, sessao_id, mensagem)
         except Exception as erro:  # rede de segurança: falha fora do turno (sessão, rate limit, config)
             logger.error("motor nativo: falha inesperada tenant=%s tipo=%s", ctx.tenant_id, type(erro).__name__)
             config = self._tenants.get(ctx.tenant_id)
@@ -167,6 +171,7 @@ class AgenteNativo:
         for camada, chave in (("sessao", sessao_id), ("tenant", CHAVE_RATE_LIMIT_TENANT)):
             consumo = await self._limitador.consumir(ctx, camada, chave)
             if not consumo.permitido:
+                self._telemetria.rate_limit_negado(ctx.tenant_id, camada)
                 logger.info("motor nativo: rate limit tenant=%s camada=%s", ctx.tenant_id, camada)
                 return RespostaAtendimento(
                     mensagem_fixa(ChaveMensagem.LIMITE, idioma_atual),
@@ -236,7 +241,12 @@ class AgenteNativo:
         turno: _Turno,
     ) -> _Desfecho:
         historico = estado.historico
-        turno.nivel = await self._roteador.classificar(texto, historico, prazo_monotonic=prazo)
+        with self._telemetria.span("classificacao"):
+            turno.nivel = await self._roteador.classificar(
+                texto, historico, prazo_monotonic=prazo, tenant_id=ctx.tenant_id
+            )
+        if turno.nivel is not None:
+            self._telemetria.roteamento(ctx.tenant_id, str(turno.nivel))
         prompt = montar_prompt(config, manual, ctx.idioma, self._relogio.agora().astimezone(FUSO_LOJA).date())
         cacheavel = self._cacheavel.setdefault(ctx.tenant_id, prompt.cacheavel)
         tools = self._ferramentas.definicoes(ctx.papel)
@@ -252,7 +262,7 @@ class AgenteNativo:
                 tools=tools,
                 prazo_monotonic=prazo,
             )
-            gerado = await self._roteador.gerar(turno.nivel, req, preferido=turno.provedor)
+            gerado = await self._roteador.gerar(turno.nivel, req, preferido=turno.provedor, tenant_id=ctx.tenant_id)
             turno.provedor = gerado.provedor
             resposta = gerado.resposta
 
@@ -266,10 +276,7 @@ class AgenteNativo:
                     )
                 )
                 resultados = await asyncio.gather(
-                    *(
-                        self._ferramentas.executar(ctx, c.nome, c.argumentos, sessao_id=sessao_id)
-                        for c in resposta.chamadas_tool
-                    )
+                    *(self._executar_tool(ctx, c.nome, c.argumentos, sessao_id) for c in resposta.chamadas_tool)
                 )
                 for chamada, resultado in zip(resposta.chamadas_tool, resultados, strict=True):
                     turno.tools.append(chamada.nome)
@@ -302,6 +309,15 @@ class AgenteNativo:
             turno.novas.append(MensagemLLM(PapelMensagem.USER, nota_correcao(suspeitos)))
 
         return _Desfecho(falha=ChaveMensagem.LIMITE_ITERACOES)
+
+    async def _executar_tool(
+        self, ctx: TenantContext, nome: str, argumentos: Mapping[str, object], sessao_id: str
+    ) -> ResultadoTool:
+        inicio = time.perf_counter()
+        with self._telemetria.span("tool", tool=nome):
+            resultado = await self._ferramentas.executar(ctx, nome, argumentos, sessao_id=sessao_id)
+        self._telemetria.tool_executada(ctx.tenant_id, nome, resultado.ok, time.perf_counter() - inicio)
+        return resultado
 
     # --- apoio ------------------------------------------------------------------------------------------------------
     @staticmethod

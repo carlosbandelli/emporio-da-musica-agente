@@ -5,6 +5,7 @@ Endpoints:
 - `POST /v1/chat`: `{session_id, mensagem, idioma?}` → `RespostaChat`. Só usa a porta `MotorDeAtendimento` da
   `Aplicacao` montada pela composição.
 - `GET /health`: liveness. 200 sempre, sem dependências.
+- `GET /metrics`: métricas Prometheus da `Telemetria` da aplicação (contrato em `docs/deploy.md` §6).
 - `GET /ready`: 200 quando a aplicação está montada (há motor com provedor de LLM); 503 com o motivo caso contrário.
 
 Tenant: header `X-Tenant-ID` (vence) ou subdomínio do `Host` (ver `_resolucao.tenant_do_host`). Sem nenhum → 400;
@@ -22,19 +23,27 @@ Sem estado global: a `Aplicacao` montada fica em `app.state`, preenchida no `lif
 
 import logging
 import math
-from collections.abc import AsyncIterator, Callable
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Annotated, Final
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from emporio.adaptadores.api._esquemas import CorpoErro, PedidoChat, RespostaChat
 from emporio.adaptadores.api._mensagens import CodigoErro, mensagem_erro
 from emporio.adaptadores.api._resolucao import idioma_do_accept_language, tenant_do_host
-from emporio.composicao import Aplicacao, ErroConfiguracao, ErroSemChaveLLM, carregar_settings, montar
+from emporio.composicao import (
+    Aplicacao,
+    ErroConfiguracao,
+    ErroSemChaveLLM,
+    carregar_settings,
+    iniciar_observabilidade,
+    montar,
+)
 from emporio.portas import CodigoResposta, Idioma, MensagemCliente, Papel, TenantContext
 
 logger = logging.getLogger(__name__)
@@ -43,10 +52,14 @@ FabricaAplicacao = Callable[[], Aplicacao]
 
 CABECALHO_TENANT: Final = "X-Tenant-ID"
 RETRY_AFTER_PADRAO_S: Final = 1
+ROTA_DESCONHECIDA: Final = "desconhecida"
+TENANT_DESCONHECIDO: Final = "desconhecido"
+ROTA_METRICAS: Final = "/metrics"
 
 
 def _montar_padrao() -> Aplicacao:
-    return montar(carregar_settings())
+    settings = carregar_settings()
+    return montar(settings, telemetria=iniciar_observabilidade(settings))
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +108,35 @@ def _retry_after(segundos: float | None) -> str:
     return str(max(RETRY_AFTER_PADRAO_S, math.ceil(segundos))) if segundos is not None else str(RETRY_AFTER_PADRAO_S)
 
 
+def _instalar_metricas_http(app: FastAPI) -> None:
+    """Middleware que emite `emporio_http_*` pela porta de telemetria da `Aplicacao` montada."""
+
+    @app.middleware("http")
+    async def _metricas_http(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        aplicacao: Aplicacao | None = request.app.state.aplicacao
+        if aplicacao is None or request.url.path == ROTA_METRICAS:
+            return await call_next(request)
+        inicio = time.perf_counter()
+        status = 500
+        try:
+            resposta = await call_next(request)
+            status = resposta.status_code
+            return resposta
+        finally:
+            rota = request.scope.get("route")
+            tenant = (request.headers.get(CABECALHO_TENANT) or "").strip() or tenant_do_host(
+                request.headers.get("host")
+            )
+            aplicacao.telemetria.http_requisicao(
+                # Tenant só vira rótulo se existir: valor do cliente nunca cria série nova (cardinalidade).
+                tenant if tenant is not None and tenant in aplicacao.tenants else TENANT_DESCONHECIDO,
+                getattr(rota, "path", ROTA_DESCONHECIDA),
+                request.method,
+                status,
+                time.perf_counter() - inicio,
+            )
+
+
 def criar_app(montar_aplicacao: FabricaAplicacao | None = None) -> FastAPI:
     """Cria a aplicação FastAPI. A `Aplicacao` é montada no `lifespan` (nada é montado no import).
 
@@ -127,6 +169,8 @@ def criar_app(montar_aplicacao: FabricaAplicacao | None = None) -> FastAPI:
     app.state.aplicacao = None
     app.state.motivo_indisponivel = ("nao_iniciada", None)
 
+    _instalar_metricas_http(app)
+
     @app.exception_handler(_ErroApi)
     async def _tratar_erro_api(_: Request, erro: _ErroApi) -> JSONResponse:
         if erro.codigo is CodigoErro.INDISPONIVEL:
@@ -146,6 +190,14 @@ def criar_app(montar_aplicacao: FabricaAplicacao | None = None) -> FastAPI:
     @app.get("/health", summary="Liveness: 200 sempre, sem dependências")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/metrics", summary="Métricas Prometheus (porta 8000; não exposta pelo Ingress)", include_in_schema=False)
+    async def metricas(request: Request) -> Response:
+        aplicacao: Aplicacao | None = request.app.state.aplicacao
+        if aplicacao is None:
+            return Response(b"", media_type="text/plain")
+        corpo, tipo = aplicacao.telemetria.exportar_metricas()
+        return Response(corpo, headers={"content-type": tipo})
 
     @app.get(
         "/ready",

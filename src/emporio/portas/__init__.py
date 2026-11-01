@@ -38,6 +38,7 @@ from emporio.portas.motor import (
     RespostaAtendimento,
 )
 from emporio.portas.repositorios import Catalogo, Clientes, FiltroProdutos, Pedidos, Solicitacoes
+from emporio.portas.telemetria import Telemetria, TelemetriaNula
 from emporio.portas.tenant import ConfigTenant, ResolvedorConfig
 
 __all__ = [
@@ -79,6 +80,8 @@ __all__ = [
     "ResultadoLimite",
     "SessaoStore",
     "Solicitacoes",
+    "Telemetria",
+    "TelemetriaNula",
     "TenantContext",
     "UsoTokens",
 ]

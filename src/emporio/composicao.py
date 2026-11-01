@@ -8,7 +8,7 @@ ou cache em variável de módulo.
 
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -22,6 +22,7 @@ from emporio.adaptadores.memoria import CircuitoStoreMemoria, RateLimiterMemoria
 from emporio.adaptadores.motor.nativo import AgenteNativo
 from emporio.adaptadores.motor.nativo.prompt import carregar_politicas
 from emporio.adaptadores.motor.nativo.roteador import Roteador
+from emporio.adaptadores.observabilidade import criar_telemetria
 from emporio.adaptadores.redis import criar_estado_redis
 from emporio.adaptadores.relogio import RelogioSistema
 from emporio.configuracao import ErroConfiguracao, Settings, carregar_tenants, obter_tenant
@@ -38,6 +39,8 @@ from emporio.portas import (
     RateLimiter,
     Relogio,
     SessaoStore,
+    Telemetria,
+    TelemetriaNula,
     TenantContext,
 )
 from emporio.portas.tenant import ConfigTenant
@@ -59,6 +62,7 @@ __all__ = [
     "ErroSemChaveLLM",
     "Settings",
     "carregar_settings",
+    "iniciar_observabilidade",
     "montar",
     "montar_diagnostico",
     "montar_ferramentas",
@@ -80,6 +84,17 @@ class Aplicacao:
     provedores: tuple[str, ...]
     """Nomes dos provedores de LLM em uso (com chave, ou os injetados)."""
     data_referencia: datetime | None = None
+    telemetria: Telemetria = field(default_factory=TelemetriaNula)
+    """Métricas e traces (nula por padrão; `iniciar_observabilidade` cria a real)."""
+
+
+def iniciar_observabilidade(settings: Settings) -> Telemetria:
+    """Liga a observabilidade real: logs JSON com scrubbing de PII, métricas Prometheus e traces OpenTelemetry.
+
+    Traces só são exportados (OTLP HTTP) se `OTEL_EXPORTER_OTLP_ENDPOINT` existir. Quem chama passa o resultado
+    a `montar(..., telemetria=...)`. Nada é ligado por `montar` sozinho (testes e CLI ficam com a telemetria nula).
+    """
+    return criar_telemetria(settings)
 
 
 def carregar_settings(**valores: object) -> Settings:
@@ -119,6 +134,7 @@ def montar(
     raiz: Path | None = None,
     dir_estado: Path | None = None,
     relogio_monotonic: Callable[[], float] = time.monotonic,
+    telemetria: Telemetria | None = None,
 ) -> Aplicacao:
     """Monta a aplicação. Levanta `ErroConfiguracao` (ou `ErroSemChaveLLM`) com mensagem clara.
 
@@ -126,12 +142,14 @@ def montar(
       provedor com chave em `settings`.
     - `raiz`: base dos caminhos relativos (`tenants_config`, `politicas_arquivo`, `dados_dir`); padrão: diretório
       atual (a raiz do repositório, ou `/app` no container).
+    - `telemetria`: porta de métricas/traces injetada nos adapters (padrão: nula).
     - `dir_estado`: onde o modo local grava as solicitações (`<raiz>/var` por padrão).
     """
     motor_ativo = settings.motor_atendimento
     if motor_ativo not in MOTORES_DISPONIVEIS:
         raise ErroConfiguracao(_mensagem_motor(motor_ativo))
 
+    telem: Telemetria = telemetria if telemetria is not None else TelemetriaNula()
     base = raiz if raiz is not None else Path.cwd()
     tenants = carregar_tenants(_resolver(base, settings.tenants_config))
     obter_tenant(tenants, settings.tenant_padrao)  # falha cedo com a lista de tenants disponíveis
@@ -139,7 +157,9 @@ def montar(
 
     relogio_app: Relogio = relogio if relogio is not None else RelogioSistema(settings.data_referencia)
     if provedores is None:
-        provedores = criar_provedores(settings, CircuitoStoreMemoria(), relogio_monotonic=relogio_monotonic)
+        provedores = criar_provedores(
+            settings, CircuitoStoreMemoria(), relogio_monotonic=relogio_monotonic, telemetria=telem
+        )
     if not provedores:
         raise ErroSemChaveLLM(
             "Nenhuma chave de LLM configurada. Defina ao menos uma das variáveis "
@@ -160,7 +180,7 @@ def montar(
     motor = AgenteNativo(
         tenants=tenants,
         politicas=politicas,
-        roteador=Roteador(provedores, relogio_monotonic=relogio_monotonic),
+        roteador=Roteador(provedores, relogio_monotonic=relogio_monotonic, telemetria=telem),
         ferramentas=montar_ferramentas(
             tenants,
             raiz=base,
@@ -172,6 +192,7 @@ def montar(
         limitador=limitador,
         relogio=relogio_app,
         relogio_monotonic=relogio_monotonic,
+        telemetria=telem,
     )
     return Aplicacao(
         motor=motor,
@@ -180,6 +201,7 @@ def montar(
         tenant_padrao=settings.tenant_padrao,
         provedores=tuple(provedores),
         data_referencia=settings.data_referencia,
+        telemetria=telem,
     )
 
 

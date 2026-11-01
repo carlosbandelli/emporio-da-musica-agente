@@ -90,3 +90,10 @@ Critério geral: **a regra mais específica vence** e, **na dúvida, o agente n�
 | 84 | Busca de produtos no Postgres | Coluna `texto_busca` (nome + descrição sem acento/caixa) com `strpos` por termo, igual ao CSV, sem exigir extensões do Postgres. |
 | 85 | Resiliência do Postgres | Timeout 2 s; retry (2 tentativas, base 0,1 s, teto 0,5 s, jitter) só em leitura e na abertura da conexão; escrita iniciada não é repetida; `registrar` idempotente por `ON CONFLICT DO NOTHING`. |
 | 86 | Tipos de data no Postgres | `solicitacoes.criada_em` é `timestamptz`; `produtos.criado_em` é `timestamp` sem fuso (igual ao CSV); listagem de produtos ordenada por `id`. |
+| 100 | Telemetria por padrão | `montar()` usa `TelemetriaNula`; só a API liga a real (`iniciar_observabilidade`). CLI e testes não mudam. Porta `Telemetria` sem texto de mensagem nem `session_id`. |
+| 101 | Cardinalidade dos rótulos | `tenant_id` das métricas HTTP só aceita tenants existentes (outro valor → `desconhecido`); rota pelo template do FastAPI (`desconhecida` sem rota). Nenhum rótulo `session_id`. |
+| 102 | Nível nas métricas de LLM | Classificação usa `nivel="classificador"`; `simples`/`media`/`complexa` só na geração. |
+| 103 | Resultado das chamadas de LLM | `circuito_aberto`, `transitorio` ou `permanente`; prazo esgotado não é contado (não é falha do provedor); `circuito_aberto` fora do histograma de duração. |
+| 104 | Custo estimado | `PRECOS_USD_POR_MILHAO`: Claude `claude-opus-5-5` 4/20/0,20 (tabela da Anthropic); Gemini e Groq aproximados, a conferir. Provedor ausente custa 0. |
+| 105 | Métricas não emitidas hoje | `rate_limit` só nas camadas `sessao` e `tenant` (as que existem); fail-open do Redis sem métrica própria (o contrato de métricas não o cobre). `/metrics` sem aplicação montada → 200 vazio. |
+| 106 | Sentry e Grafana | Fora da entrega por decisão do usuário: `SENTRY_DSN` não é usado e os dashboards em `deploy/observabilidade/` não são exercitados. Ficam como melhoria futura (README). |
