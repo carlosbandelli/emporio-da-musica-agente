@@ -187,3 +187,4 @@ Destino: `docs/arquitetura.md` e `docs/premissas.md`.
 ## Registro de fechamento de Stories
 
 - **S1.A Fundação** (2026-11-01, `c90ee50`): grafo 118 nós / 462 arestas, 7 comunidades, 1 fluxo; review context risco baixo, 0 nós impactados fora do escopo; 26 lacunas de teste apontadas são Protocols e formas de dados sem lógica (cobertas pelos testes de contrato/adapters nas tasks 1.5–1.11); import-linter 12/12 KEPT.
+- **S1.B Regras de negócio** (2026-11-01, `7ebda3b`): grafo 610 nós / 4053 arestas; review context risco baixo, 4 nós impactados fora do escopo (adapter CSV `_base`, esperado); as 147 "lacunas de teste" do grafo são funções sem aresta direta de teste, mas a cobertura medida em `modulos` é 99%; import-linter 12/12 KEPT; 403 testes.
