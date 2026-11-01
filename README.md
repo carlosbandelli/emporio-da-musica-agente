@@ -24,7 +24,7 @@ Você precisa de [git](https://git-scm.com/) e do [uv](https://docs.astral.sh/uv
 | Caminho | Pré-requisitos | Comandos | O que mostra | Situação |
 |---|---|---|---|---|
 | **1. Rápido** (padrão) | git, uv e uma chave de LLM | `uv sync`, `.env`, `uv run emporio chat` | o agente completo, sobre os CSVs, sem Docker | funciona (núcleo) |
-| **2. Completo** | + Docker | `docker compose up -d` | réplicas, Traefik, schema por tenant, rate limit, dashboards | futuro: Fase 2 não implementada (ver abaixo) |
+| **2. Completo** | + Docker | `docker compose up -d` | réplicas, Traefik, schema por tenant, rate limit, dashboards | funciona (smoke executado) |
 | **3. Sem rodar** | nenhum | ler `exemplos/`; `uv run pytest` | conversas gravadas; regras testadas com LLM simulado, sem chave | funciona |
 
 ### Caminho 1: passo a passo
@@ -97,8 +97,42 @@ uv run emporio chat
 - Rode os comandos na raiz do repositório. O `.env` e a pasta `config/` são lidos a partir da pasta atual.
 - A API (task 2.1) roda local: `uv run uvicorn emporio.adaptadores.api.app:app --port 8000` (`GET /health`, `GET /ready`,
   `POST /v1/chat` com `X-Tenant-ID` ou subdomínio do `Host`; `Accept-Language` escolhe pt-BR ou en-US). Sem chave de LLM ela
-  sobe, mas `/ready` e `/v1/chat` devolvem 503. O caminho 2 (Docker) ainda depende da task 2.8; os artefatos de `deploy/`
-  não foram exercitados.
+  sobe, mas `/ready` e `/v1/chat` devolvem 503. O caminho 2 (Docker) está na próxima seção.
+
+### Caminho 2: Docker (Traefik, 3 réplicas, Postgres, Redis, Prometheus)
+
+Pré-requisito: Docker com Compose v2 e o arquivo `.env` com ao menos uma chave de LLM (o compose o lê por `env_file`).
+
+```bash
+docker compose up -d --build        # migração (serviço "migrate") -> 3 réplicas da app -> Traefik
+docker compose ps                   # app x3 healthy, postgres, redis, traefik, prometheus
+curl localhost/health
+curl localhost/ready
+curl -X POST localhost/v1/chat -H "X-Tenant-ID: emporio" -H "Content-Type: application/json" \
+  -d '{"session_id":"demo-1","mensagem":"Ola, qual o horario de funcionamento da loja?"}'
+docker compose down -v              # derruba e apaga os volumes
+```
+
+Smoke executado (Docker Engine 29, Windows 11): `migrate` terminou com código 0; as 3 réplicas ficaram `healthy`;
+`/health` e `/ready` via Traefik responderam 200 (10 chamadas a `/ready` caíram nas 3 réplicas); `/metrics` não passa pela
+borda (404) e o Prometheus raspou os 4 alvos (3 réplicas e o Traefik); uma chamada a `POST /v1/chat` respondeu 200
+(nível `simples`, provedor `gemini`, tool `status_loja`). Variáveis úteis: `APP_REPLICAS` (padrão 3) e
+`POSTGRES_PASSWORD`.
+
+Observações do caminho 2:
+
+- O Traefik é v3.6 porque as versões anteriores não falam com o Docker Engine 29 (API mínima 1.44).
+- No Windows, se o caminho do repositório tiver acentos (como `Técnico`), o BuildKit falha com `x-docker-expose-session-sharedkey
+  contains value with non-printable ASCII characters`. Clone para um caminho só com ASCII, ou construa a imagem de uma cópia
+  ASCII (`docker build --target runtime -t emporio:local .`) e suba com `docker compose up -d --no-build`.
+- Grafana e Sentry ficaram para o futuro. O Sentry agruparia exceções com stack trace e contexto, alertaria regressões e
+  rastrearia releases. O Grafana montaria painéis sobre as métricas Prometheus (latência p95 por provedor, taxa de
+  fallback/degradação, circuito aberto, tokens e custo por tenant) e alertas. O dashboard de partida está em
+  `deploy/observabilidade/grafana/` (sem serviço no compose). OTel Collector, Loki e Alloy seguem como perfil opcional
+  (`--profile observabilidade`, com `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`).
+- CI (`.github/workflows/ci-cd.yml`): lint (ruff e import-linter), tipos (mypy) e testes (pytest, com Postgres e Redis
+  como serviços do Actions) em cadeia, depois build da imagem no GHCR. Scan e deploy em Kubernetes são exemplo: o deploy
+  só roda com a variável de repositório `DEPLOY_ENABLED=true` e o secret `KUBECONFIG_PRODUCAO`; não há cluster nesta entrega.
 
 ---
 
@@ -377,8 +411,8 @@ o parcelamento, mas omitiu o PIX que o cliente tinha pedido.
 
 ### 8.1 Não implementado (Fase 2 e arquitetura §13)
 
-A Fase 2 faz parte do desenho, mas não foi entregue. Os arquivos de `deploy/`, o `Dockerfile`, o `docker-compose.yml` e o
-workflow de CI existem, mas não foram exercitados:
+A Fase 2 faz parte do desenho, mas não foi entregue. Os arquivos de `deploy/`, o `Dockerfile` e o `docker-compose.yml` foram
+exercitados (seção 1, caminho 2); Kubernetes e o deploy da pipeline não:
 
 - Postgres com um schema por tenant, migrações e seed; Redis para sessão, rate limit e cache;
 - rate limit em camadas (sessão, usuário, tenant, provedor) e rate limit por IP na borda;

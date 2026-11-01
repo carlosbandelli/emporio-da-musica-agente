@@ -1,9 +1,11 @@
 # Ambiente local do Empório da Música.
 #
-# Essencial (Traefik + app em réplicas + Postgres + Redis + migração):
+# Essencial (Traefik + app em réplicas + Postgres + Redis + migração + Prometheus):
 #   docker compose up -d --build
-# Com observabilidade (OTel Collector, Prometheus, Loki, Alloy, Grafana):
+# Prometheus já sobe no conjunto essencial (raspa /metrics da app e do Traefik).
+# Perfil opcional (OTel Collector, Loki, Alloy):
 #   docker compose --profile observabilidade up -d --build
+# Grafana e Sentry ficaram para o futuro (deploy/observabilidade/grafana/README.md).
 # Escalar a app (horizontal):
 #   APP_REPLICAS=5 docker compose up -d        (ou: docker compose up -d --scale app=5)
 #
@@ -26,7 +28,8 @@ x-app: &app
   environment:
     DATABASE_URL: postgresql+psycopg://emporio:${POSTGRES_PASSWORD:-emporio-dev}@postgres:5432/emporio
     REDIS_URL: redis://redis:6379/0
-    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    # Vazio = sem traces. Com o perfil observabilidade: OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
   networks:
     - borda
     - dados
@@ -37,7 +40,8 @@ services:
   # Borda: load balancer, reverse proxy e API gateway
   # ---------------------------------------------------------------------------
   traefik:
-    image: traefik:v3.5
+    # v3.6+: o cliente Docker das versões anteriores é rejeitado pelo Docker Engine 29 (API mínima 1.44).
+    image: traefik:v3.6
     command:
       - --log.level=INFO
       - --log.format=json
@@ -58,10 +62,6 @@ services:
       - --ping.entryPoint=metrics
       # Dashboard: acessível só via router com basic auth (label traefik.http.routers.traefik.*).
       - --api.dashboard=true
-      # Traces da borda para o OTel Collector (perfil observabilidade).
-      - --tracing.serviceName=traefik
-      - --tracing.otlp.http=true
-      - --tracing.otlp.http.endpoint=http://otel-collector:4318/v1/traces
       # Let's Encrypt (produção com domínio público). Descomente e ajuste o e-mail:
       # - --entrypoints.websecure.address=:443
       # - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-voce@exemplo.com}
@@ -75,7 +75,8 @@ services:
       - ./deploy/traefik/usuarios.htpasswd:/etc/traefik/usuarios.htpasswd:ro
       # - ./deploy/traefik/letsencrypt:/letsencrypt
     healthcheck:
-      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      # O healthcheck é outro processo: repete as flags do entrypoint de ping.
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping.entryPoint=metrics", "--entryPoints.metrics.address=:8082"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -132,10 +133,14 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=borda
-      # Só /v1/* é roteado. /metrics, /health e /ready NÃO passam pela borda.
+      # Só /v1/*, /health e /ready são roteados. /metrics NÃO passa pela borda (Prometheus raspa pela rede interna).
       - traefik.http.routers.app.rule=PathPrefix(`/v1`)
       - traefik.http.routers.app.entrypoints=web
       - traefik.http.routers.app.middlewares=gw-ratelimit@docker,gw-headers@docker,gw-compress@docker
+      - traefik.http.routers.app-sonda.rule=Path(`/health`) || Path(`/ready`)
+      - traefik.http.routers.app-sonda.entrypoints=web
+      - traefik.http.routers.app-sonda.service=app
+      - traefik.http.routers.app-sonda.middlewares=gw-headers@docker
       # Sem retry no gateway: cada tentativa de POST /v1/chat custa uma chamada de LLM (resiliência fica na app).
       - traefik.http.services.app.loadbalancer.server.port=8000
       # Health ativo do Traefik: tira da rotação a réplica que não responde (liveness). Sem sticky sessions.
@@ -201,7 +206,6 @@ services:
     restart: unless-stopped
 
   prometheus:
-    profiles: ["observabilidade"]
     image: prom/prometheus:v3.5.0
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -243,33 +247,6 @@ services:
       - dados
     restart: unless-stopped
 
-  grafana:
-    profiles: ["observabilidade"]
-    image: grafana/grafana:12.2.0
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-troque-esta-senha}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_AUTH_ANONYMOUS_ENABLED: "false"
-      # Servido em /grafana atrás do Traefik (sem remover o prefixo)
-      GF_SERVER_ROOT_URL: http://localhost/grafana/
-      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/agente.json
-    volumes:
-      - ./deploy/observabilidade/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./deploy/observabilidade/grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - grafana-dados:/var/lib/grafana
-    networks:
-      - borda
-      - dados
-    labels:
-      - traefik.enable=true
-      - traefik.http.services.grafana.loadbalancer.server.port=3000
-      - traefik.http.routers.grafana.rule=PathPrefix(`/grafana`)
-      - traefik.http.routers.grafana.entrypoints=web
-      - traefik.http.routers.grafana.middlewares=auth-operacao@docker,gw-headers@docker
-    restart: unless-stopped
-
 networks:
   # Borda: única rede com porta publicada (Traefik) e com saída para a internet (LLMs).
   borda: {}
@@ -284,4 +261,3 @@ volumes:
   prometheus-dados:
   loki-dados:
   alloy-dados:
-  grafana-dados:

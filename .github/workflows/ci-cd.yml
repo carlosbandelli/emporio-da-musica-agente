@@ -1,7 +1,8 @@
 # Pipeline CI/CD do Empório da Música.
 # Estágios em cadeia: lint -> tipos -> testes -> build/push (main) -> scan (main) -> deploy (main, com aprovação).
 #
-# Observação: o deploy é um EXEMPLO. Não há cluster real neste repositório. Os secrets e o environment
+# Observação: scan e deploy só rodam com a variável do repositório DEPLOY_ENABLED=true (desligado por padrão).
+# O deploy é um EXEMPLO. Não há cluster real neste repositório. Os secrets e o environment
 # "producao" precisam ser configurados no GitHub antes de uso (ver docs/deploy.md).
 #
 # Para reprodutibilidade, fixe em produção as versões das actions e do uv pelo SHA do commit.
@@ -74,7 +75,7 @@ jobs:
         run: uv run mypy src
 
   # -------------------------------------------------------------------------
-  # 3. Testes com Postgres e Redis reais (serviços do GitHub Actions)
+  # 3. Testes (Postgres como serviço do Actions; Redis via fakeredis/testcontainers)
   # -------------------------------------------------------------------------
   testes:
     name: Testes (pytest)
@@ -95,24 +96,10 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     env:
-      # Valores só para CI: a suíte usa adapters de teste e não chama provedores reais.
-      DATABASE_URL: postgresql+psycopg://emporio:emporio@localhost:5432/emporio
-      REDIS_URL: redis://localhost:6379/0
-      TENANTS_CONFIG: config/tenants.yaml
-      GOOGLE_API_KEY: ci-fake
-      GROQ_API_KEY: ci-fake
-      ANTHROPIC_API_KEY: ci-fake
-      JWT_SECRET: ci-somente-nao-usar-em-producao
+      # Postgres de serviço para os testes marcados "postgres" (cada teste cria o próprio banco).
+      # Redis usa fakeredis/testcontainers e o LLM é simulado: nenhuma chave de provedor é necessária.
+      TEST_DATABASE_URL: postgresql+psycopg://emporio:emporio@localhost:5432/emporio
       LOG_LEVEL: WARNING
     steps:
       - uses: actions/checkout@v4
@@ -123,10 +110,6 @@ jobs:
 
       - name: Instalar dependências (uv.lock)
         run: uv sync --locked --all-groups
-
-      - name: Aplicar migrações no banco de teste
-        # Para testes de integração que precisam do schema do tenant. Usa advisory lock como em produção.
-        run: uv run python -m emporio.adaptadores.db.migrar
 
       - name: pytest
         run: uv run pytest
@@ -187,6 +170,7 @@ jobs:
   scan:
     name: Scan (trivy)
     needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -214,7 +198,7 @@ jobs:
   deploy:
     name: Deploy produção (exemplo)
     needs: [build, scan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Aprovação: configure "Required reviewers" no environment "producao" (Settings > Environments).

@@ -1,4 +1,4 @@
-# Prometheus: raspa a app (réplicas descobertas pelo DNS do serviço "app"), o Traefik e o OTel Collector.
+# Prometheus: raspa a app (réplicas descobertas pelo DNS do serviço "app"), o Traefik .
 # /metrics da app é raspado pela rede interna. Nunca passa pelo Traefik.
 
 global:
@@ -18,7 +18,3 @@ scrape_configs:
   - job_name: traefik
     static_configs:
       - targets: ["traefik:8082"]
-
-  - job_name: otel-collector
-    static_configs:
-      - targets: ["otel-collector:8889", "otel-collector:8888"]

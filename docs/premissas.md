@@ -97,3 +97,9 @@ Critério geral: **a regra mais específica vence** e, **na dúvida, o agente n�
 | 104 | Custo estimado | `PRECOS_USD_POR_MILHAO`: Claude `claude-opus-5-5` 4/20/0,20 (tabela da Anthropic); Gemini e Groq aproximados, a conferir. Provedor ausente custa 0. |
 | 105 | Métricas não emitidas hoje | `rate_limit` só nas camadas `sessao` e `tenant` (as que existem); fail-open do Redis sem métrica própria (o contrato de métricas não o cobre). `/metrics` sem aplicação montada → 200 vazio. |
 | 106 | Sentry e Grafana | Fora da entrega por decisão do usuário: `SENTRY_DSN` não é usado e os dashboards em `deploy/observabilidade/` não são exercitados. Ficam como melhoria futura (README). |
+| 130 | Versão do Traefik | v3.6 é o mínimo para o Docker Engine 29 (a v3.5 recebe 400 da API do Docker e não cria routers). |
+| 131 | Sondas pela borda | `/health` e `/ready` passam pelo Traefik (sem rate limit) para o smoke e sondas externas; `/metrics` fica interno. |
+| 132 | Observabilidade no compose | Prometheus sobe no conjunto essencial; OTel Collector, Loki e Alloy só no perfil `observabilidade`; OTLP desligado por padrão; sem Grafana (#106). |
+| 133 | Testes na CI | Postgres como serviço do Actions via `TEST_DATABASE_URL`; Redis por fakeredis/testcontainers; nenhuma chave de LLM necessária. |
+| 134 | Deploy na CI | Scan e deploy só com a variável de repositório `DEPLOY_ENABLED=true` (sem cluster nesta entrega). |
+| 135 | Build no Windows com acento no caminho | O BuildKit rejeita o caminho com acento (`Técnico`); contorno documentado no README: buildar de uma cópia em pasta ASCII e subir com `--no-build`. |
