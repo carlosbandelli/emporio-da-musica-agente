@@ -1,8 +1,9 @@
 # Suíte de contrato da porta `MotorDeAtendimento`
 
 Garante que **todo** motor de atendimento cumpre os invariantes I1-I8 de `docs/arquitetura.md` §3.2. Cada teste de
-`test_motor_atendimento.py` roda uma vez por motor registrado; hoje `nativo` (`AgenteNativo`) e `api` (o mesmo `AgenteNativo` através de `POST /v1/chat`, via `MotorViaApi` em `motor_via_api.py`, por ASGI em memória). Na Fase 2 entra
-`n8n` (`AgenteN8n`, task 2.7), que precisa passar na mesma suíte sem mudar nenhum teste.
+`test_motor_atendimento.py` roda uma vez por motor registrado: `nativo` (`AgenteNativo`), `api` (o mesmo `AgenteNativo` através de `POST /v1/chat`, via `MotorViaApi`
+em `motor_via_api.py`, por ASGI em memória) e `n8n` (`AgenteN8n`, task 2.7, contra o n8n simulado de
+`n8n_simulado.py`), todos sem mudar nenhum teste.
 
 ```
 uv run pytest tests/contrato -v
@@ -16,6 +17,7 @@ Nenhum teste usa rede nem `.env`: o LLM é o `LLMFalso` roteirizável e os dados
 |---|---|
 | `kit.py` | `KitMotor`, `EspiaoTools`, o tipo `FabricaMotor` e os tenants de teste (`tenants_ab`). |
 | `motor_via_api.py` | `MotorViaApi`: implementa a porta chamando a API FastAPI (usado pela fábrica `api`). |
+| `n8n_simulado.py` | `N8nSimulado`: o workflow de `deploy/n8n/` num `httpx.MockTransport` (LLM falso + tools reais por HTTP). |
 | `fabricas.py` | Fábricas dos motores e o registro `MOTORES` (nome → fábrica). **Único arquivo que muda para um motor novo.** |
 | `conftest.py` | Fixture `motor_factory`, parametrizada por `MOTORES`. |
 | `invariantes.py` | `verificar_i1` ... `verificar_i8`: a lógica de cada invariante, só pela porta. |
@@ -76,4 +78,8 @@ tool) e roda `verificar_i4` e `verificar_i6` contra ele, exigindo `AssertionErro
   motor que não coloque o nome da loja no prompt do LLM falha I3 e deve ajustar a fábrica ou o prompt.
 - I5 mede só que o motor volta em menos de 3 s com deadline de 0,05 s (sem relógio falso), com folga para máquinas lentas.
 
+- **Fábrica `n8n`.** O `AgenteN8n` chama o webhook simulado; o simulado repassa cada passo de LLM ao `LLMFalso` do
+  kit e executa as tools por `POST /v1/tools/{nome}` na app FastAPI real (em memória), com o token de atendente que o
+  motor emite por turno. O espião de tools fica atrás da API, então `tools.chamadas` vê as chamadas HTTP. Falha do
+  "workflow" vira HTTP 500, como no n8n.
 - **Fábrica `api`.** Roda I1-I8 sem nenhuma exceção: o cliente envia `X-Tenant-ID` e o idioma do canal no corpo, e reconstrói a `RespostaAtendimento` do JSON (inclusive `codigo` e `retry_after_s`). Erros de borda (400/404/422) viram `RuntimeError` no teste, porque a suíte só envia requisições válidas.

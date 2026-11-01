@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     sentry_dsn: SecretStr | None = None
     otel_exporter_otlp_endpoint: str | None = None
     jwt_secret: SecretStr | None = None
+    # Motor n8n (task 2.7, `MOTOR_ATENDIMENTO=n8n`; contrato em deploy/n8n/README.md). A URL do webhook pode levar
+    # segredo no caminho: SecretStr. `n8n_webhook_segredo` vai no `Authorization: Bearer` (Header Auth do Webhook).
+    # `n8n_url_api` é a base da API vista de dentro do n8n, para ele chamar `/v1/tools/*` de volta.
+    n8n_webhook_url: SecretStr | None = None
+    n8n_webhook_segredo: SecretStr | None = None
+    n8n_url_api: str = "http://app:8000"
 
     def provedores_com_chave(self) -> tuple[str, ...]:
         """Nomes dos provedores de LLM com chave configurada (nunca os valores)."""

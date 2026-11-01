@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from emporio.adaptadores.llm import LLMFalso, chamar_tool
+from emporio.adaptadores.motor.n8n import AgenteN8n
 from emporio.adaptadores.motor.nativo import AgenteNativo
 from emporio.composicao import (
     MOTORES_DISPONIVEIS,
@@ -13,6 +14,7 @@ from emporio.composicao import (
     ErroSemChaveLLM,
     carregar_settings,
     montar,
+    montar_diagnostico,
 )
 from emporio.configuracao import ErroConfiguracao, Settings
 from emporio.portas import MensagemCliente, PapelMensagem, RequisicaoLLM, RespostaLLM, TenantContext
@@ -24,7 +26,17 @@ CHAVES = ("GOOGLE_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY")
 
 @pytest.fixture(autouse=True)
 def _ambiente_limpo(monkeypatch: pytest.MonkeyPatch) -> None:
-    for nome in (*CHAVES, "MOTOR_ATENDIMENTO", "DATA_REFERENCIA", "TENANTS_CONFIG", "TENANT_PADRAO"):
+    for nome in (
+        *CHAVES,
+        "MOTOR_ATENDIMENTO",
+        "DATA_REFERENCIA",
+        "TENANTS_CONFIG",
+        "TENANT_PADRAO",
+        "JWT_SECRET",
+        "N8N_WEBHOOK_URL",
+        "N8N_WEBHOOK_SEGREDO",
+        "N8N_URL_API",
+    ):
         monkeypatch.delenv(nome, raising=False)
 
 
@@ -44,9 +56,38 @@ def test_montar_recusa_motor_desconhecido_mesmo_sem_validacao() -> None:
         montar(s, provedores={"falso": LLMFalso()}, raiz=RAIZ)
 
 
-def test_motor_n8n_ainda_nao_disponivel(tmp_path: Path) -> None:
-    with pytest.raises(ErroConfiguracao, match="Fase 2"):
-        montar(settings(motor_atendimento="n8n"), provedores={"falso": LLMFalso()}, raiz=RAIZ, dir_estado=tmp_path)
+SEGREDO_JWT = "segredo-jwt-da-composicao-com-bem-mais-de-32-bytes"
+URL_N8N = "http://n8n:5678/webhook/emporio-atendimento"
+
+
+def test_motor_n8n_sem_url_e_erro_de_configuracao_claro(tmp_path: Path) -> None:
+    with pytest.raises(ErroConfiguracao, match="N8N_WEBHOOK_URL"):
+        montar(settings(motor_atendimento="n8n", jwt_secret=SEGREDO_JWT), raiz=RAIZ, dir_estado=tmp_path)
+
+
+def test_motor_n8n_com_url_invalida_e_erro_de_configuracao(tmp_path: Path) -> None:
+    s = settings(motor_atendimento="n8n", jwt_secret=SEGREDO_JWT, n8n_webhook_url="n8n:5678/webhook")
+    with pytest.raises(ErroConfiguracao, match="http"):
+        montar(s, raiz=RAIZ, dir_estado=tmp_path)
+
+
+def test_motor_n8n_sem_jwt_secret_e_erro_de_configuracao(tmp_path: Path) -> None:
+    with pytest.raises(ErroConfiguracao, match="JWT_SECRET"):
+        montar(settings(motor_atendimento="n8n", n8n_webhook_url=URL_N8N), raiz=RAIZ, dir_estado=tmp_path)
+
+
+def test_motor_n8n_monta_agente_n8n_sem_chave_de_llm(tmp_path: Path) -> None:
+    s = settings(motor_atendimento="n8n", n8n_webhook_url=URL_N8N, jwt_secret=SEGREDO_JWT)
+    app = montar(s, raiz=RAIZ, dir_estado=tmp_path)
+    assert isinstance(app.motor, AgenteN8n) and app.motor_ativo == "n8n"
+    assert app.provedores == ("n8n",) and app.identidade is not None and app.ferramentas is not None
+    assert "n8n" in MOTORES_DISPONIVEIS
+
+
+def test_carregar_settings_aceita_n8n() -> None:
+    s = carregar_settings(_env_file=None, motor_atendimento="n8n", n8n_webhook_segredo="segredo-que-nao-aparece")
+    assert s.motor_atendimento == "n8n" and s.n8n_url_api == "http://app:8000"
+    assert "segredo-que-nao-aparece" not in repr(s)
 
 
 def test_sem_chave_e_sem_injecao_e_erro_de_configuracao_claro(tmp_path: Path) -> None:
@@ -105,3 +146,10 @@ async def test_redis_fora_do_ar_nao_derruba_o_chat(tmp_path: Path) -> None:
     )
     r = await app.motor.responder(TenantContext("emporio"), "s1", MensagemCliente("oi"))
     assert r.degradada is False and r.texto == "Olá! Como posso ajudar?"
+
+
+async def test_diagnostico_do_motor_n8n_aponta_o_que_falta_sem_pedir_chave_de_llm() -> None:
+    diag = montar_diagnostico(settings(motor_atendimento="n8n"), raiz=RAIZ)
+    info = await diag.diagnosticar(TenantContext("emporio"))
+    assert any("N8N_WEBHOOK_URL" in a for a in info.avisos) and any("JWT_SECRET" in a for a in info.avisos)
+    assert not any("GROQ_API_KEY" in a for a in info.avisos)

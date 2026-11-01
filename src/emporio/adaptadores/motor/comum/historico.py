@@ -12,7 +12,7 @@ provedores (premissa #47); o custo é um cache miss na rodada seguinte ao corte.
 import dataclasses
 from collections.abc import Sequence
 
-from emporio.adaptadores.motor.nativo.guarda import eh_nota_interna
+from emporio.adaptadores.motor.comum.guarda import eh_nota_interna
 from emporio.portas.llm import MensagemLLM, PapelMensagem
 
 

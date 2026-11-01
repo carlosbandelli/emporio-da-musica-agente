@@ -1,0 +1,445 @@
+{
+  "name": "Empório da Música - atendimento (AgenteN8n)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emporio-atendimento",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1f0c2d4-0001-4000-8000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "emporio-atendimento",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Empório - segredo do webhook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.body.mensagem }}",
+        "options": {
+          "systemMessage": "={{ $json.body.sistema.cacheavel }}\n\n{{ $json.body.sistema.dinamico }}\n\nConversa até aqui (mais antiga primeiro):\n{{ $json.body.historico.map(m => (m.papel === 'user' ? 'Cliente: ' : 'Atendente: ') + m.texto).join('\n') || '(início da conversa)' }}",
+          "maxIterations": 6,
+          "returnIntermediateSteps": true
+        }
+      },
+      "id": "a1f0c2d4-0002-4000-8000-000000000002",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
+      },
+      "id": "a1f0c2d4-0003-4000-8000-000000000003",
+      "name": "Gemini",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        160,
+        260
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ texto: $json.output, tools_chamadas: ($json.intermediateSteps || []).map(p => ({ nome: p.action.tool, argumentos: p.action.toolInput, resultado: p.observation })), nivel: null, provedor: 'gemini' }) }}",
+        "options": {}
+      },
+      "id": "a1f0c2d4-0004-4000-8000-000000000004",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        700,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Busca instrumentos no catálogo da loja por texto, categoria e/ou faixa de preço. Devolve preço vigente e disponibilidade calculados pela loja.",
+        "method": "POST",
+        "url": "={{ $('Webhook').first().json.body.tools.url_base }}/buscar_produtos",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Webhook').first().json.body.tools.token }}"
+            },
+            {
+              "name": "X-Tenant-ID",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "={{ $('Webhook').first().json.body.idioma }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ argumentos: $fromAI('argumentos', 'Objeto JSON com os argumentos da tool. Campos: texto (string); categoria (string); preco_min (number); preco_max (number)', 'json'), session_id: $('Webhook').first().json.body.sessao_id }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1f0c2d4-0100-4000-8000-000000000100",
+      "name": "buscar_produtos",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Detalhes de UM produto pelo nome ou id: preço de tabela e vigente, promoção, preço no PIX, parcelamento, estoque, specs e alternativas.",
+        "method": "POST",
+        "url": "={{ $('Webhook').first().json.body.tools.url_base }}/detalhar_produto",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Webhook').first().json.body.tools.token }}"
+            },
+            {
+              "name": "X-Tenant-ID",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "={{ $('Webhook').first().json.body.idioma }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ argumentos: $fromAI('argumentos', 'Objeto JSON com os argumentos da tool. Campos: produto_id (integer); nome (string)', 'json'), session_id: $('Webhook').first().json.body.sessao_id }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1f0c2d4-0101-4000-8000-000000000101",
+      "name": "detalhar_produto",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Simula o pagamento de itens (só ids e quantidades): total, PIX, parcelamento e frete. Todos os valores são calculados pela loja.",
+        "method": "POST",
+        "url": "={{ $('Webhook').first().json.body.tools.url_base }}/simular_pagamento",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Webhook').first().json.body.tools.token }}"
+            },
+            {
+              "name": "X-Tenant-ID",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "={{ $('Webhook').first().json.body.idioma }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ argumentos: $fromAI('argumentos', 'Objeto JSON com os argumentos da tool. Campos: itens (lista de objetos com produto_id (integer, obrigatório); quantidade (integer, obrigatório), obrigatório); forma (pix|credito|debito|boleto); parcelas (integer); cidade (string)', 'json'), session_id: $('Webhook').first().json.body.sessao_id }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1f0c2d4-0102-4000-8000-000000000102",
+      "name": "simular_pagamento",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Consulta um pedido pelo número E pelo e-mail ou telefone do cadastro (prova de identidade).",
+        "method": "POST",
+        "url": "={{ $('Webhook').first().json.body.tools.url_base }}/consultar_pedido",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Webhook').first().json.body.tools.token }}"
+            },
+            {
+              "name": "X-Tenant-ID",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "={{ $('Webhook').first().json.body.idioma }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ argumentos: $fromAI('argumentos', 'Objeto JSON com os argumentos da tool. Campos: numero (integer, obrigatório); email_ou_telefone (string, obrigatório)', 'json'), session_id: $('Webhook').first().json.body.sessao_id }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1f0c2d4-0103-4000-8000-000000000103",
+      "name": "consultar_pedido",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Diz se a loja está aberta agora, quando reabre, o horário semanal e os contatos.",
+        "method": "POST",
+        "url": "={{ $('Webhook').first().json.body.tools.url_base }}/status_loja",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Webhook').first().json.body.tools.token }}"
+            },
+            {
+              "name": "X-Tenant-ID",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "={{ $('Webhook').first().json.body.idioma }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ argumentos: {}, session_id: $('Webhook').first().json.body.sessao_id }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1f0c2d4-0104-4000-8000-000000000104",
+      "name": "status_loja",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Registra uma solicitação para a equipe humana (reclamação, cotação de frete, outros) e devolve o protocolo.",
+        "method": "POST",
+        "url": "={{ $('Webhook').first().json.body.tools.url_base }}/registrar_solicitacao",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Webhook').first().json.body.tools.token }}"
+            },
+            {
+              "name": "X-Tenant-ID",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "={{ $('Webhook').first().json.body.idioma }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ argumentos: $fromAI('argumentos', 'Objeto JSON com os argumentos da tool. Campos: tipo (reclamacao|cotacao_frete|outros, obrigatório); descricao (string, obrigatório); contato (string)', 'json'), session_id: $('Webhook').first().json.body.sessao_id }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1f0c2d4-0105-4000-8000-000000000105",
+      "name": "registrar_solicitacao",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        260
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscar_produtos": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "detalhar_produto": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "simular_pagamento": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "consultar_pedido": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "status_loja": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "registrar_solicitacao": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none"
+  },
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from emporio.adaptadores.motor.nativo.prompt import PromptSistema, carregar_politicas, montar_prompt
+from emporio.adaptadores.motor.comum.prompt import PromptSistema, carregar_politicas, montar_prompt
 from emporio.configuracao.tenants import ErroConfiguracao, carregar_tenant
 from emporio.portas.contexto import Idioma
 from emporio.portas.tenant import ConfigTenant

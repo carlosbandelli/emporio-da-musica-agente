@@ -1,4 +1,4 @@
-"""System prompt do motor nativo (CAG, arquitetura §1): persona, regras e o manual de políticas completo.
+"""System prompt dos motores (CAG, arquitetura §1): persona, regras e o manual de políticas completo.
 
 O prompt sai em dois blocos que mapeiam 1:1 para `RequisicaoLLM`:
 

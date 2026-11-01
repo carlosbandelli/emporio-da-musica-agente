@@ -13,17 +13,17 @@ from pydantic import BaseModel
 
 from emporio.adaptadores.llm import LLMFalso, chamar_tool, chamar_tools, responder_texto
 from emporio.adaptadores.memoria import RateLimiterMemoria, SessaoStoreMemoria
-from emporio.adaptadores.motor.nativo import AgenteNativo, ChaveMensagem, mensagem_fixa
-from emporio.adaptadores.motor.nativo.guarda import (
+from emporio.adaptadores.motor.comum.guarda import (
     NOTA_INTERNA_PREFIXO,
     centavos_de,
     valores_monetarios,
     valores_nao_verificados,
     valores_permitidos,
 )
-from emporio.adaptadores.motor.nativo.historico import cortar_historico
-from emporio.adaptadores.motor.nativo.idioma import detectar_idioma, pedido_de_troca, resolver_idioma
-from emporio.adaptadores.motor.nativo.prompt import carregar_politicas
+from emporio.adaptadores.motor.comum.historico import cortar_historico
+from emporio.adaptadores.motor.comum.idioma import detectar_idioma, pedido_de_troca, resolver_idioma
+from emporio.adaptadores.motor.comum.prompt import carregar_politicas
+from emporio.adaptadores.motor.nativo import AgenteNativo, ChaveMensagem, mensagem_fixa
 from emporio.adaptadores.motor.nativo.roteador import Roteador
 from emporio.composicao import montar_ferramentas
 from emporio.configuracao.tenants import carregar_tenants

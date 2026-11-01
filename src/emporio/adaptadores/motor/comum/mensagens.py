@@ -1,4 +1,4 @@
-"""Catálogo de mensagens fixas do motor nativo (arquitetura §10), em pt-BR e en-US, no tom da Sônia.
+"""Catálogo de mensagens fixas dos motores (arquitetura §10), em pt-BR e en-US, no tom da Sônia.
 
 Não dependem de LLM: funcionam com todos os provedores fora. Os contatos vêm da configuração do tenant, nunca
 escritos aqui. Só constantes imutáveis no módulo.

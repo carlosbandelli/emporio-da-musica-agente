@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from emporio.adaptadores.llm import chamar_tool, responder_texto
-from emporio.adaptadores.motor.nativo.guarda import valores_monetarios
+from emporio.adaptadores.motor.comum.guarda import valores_monetarios
 from emporio.portas import PapelMensagem
 from tests.e2e.apoio import (
     argumentos_chamados,

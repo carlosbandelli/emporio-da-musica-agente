@@ -25,11 +25,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Final, Protocol
 
-from emporio.adaptadores.motor.nativo.guarda import nota_correcao, valores_nao_verificados, valores_permitidos
-from emporio.adaptadores.motor.nativo.historico import cortar_historico
-from emporio.adaptadores.motor.nativo.idioma import resolver_idioma
-from emporio.adaptadores.motor.nativo.mensagens import ChaveMensagem, mensagem_fixa
-from emporio.adaptadores.motor.nativo.prompt import montar_prompt
+from emporio.adaptadores.motor.comum.guarda import nota_correcao, valores_nao_verificados, valores_permitidos
+from emporio.adaptadores.motor.comum.historico import cortar_historico
+from emporio.adaptadores.motor.comum.idioma import resolver_idioma
+from emporio.adaptadores.motor.comum.mensagens import ChaveMensagem, mensagem_fixa
+from emporio.adaptadores.motor.comum.prompt import montar_prompt
 from emporio.adaptadores.motor.nativo.roteador import ErroSemProvedor, Nivel, Roteador
 from emporio.modulos.atendimento.aplicacao import ResultadoTool
 from emporio.modulos.politicas.dominio import FUSO_LOJA

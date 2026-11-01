@@ -242,6 +242,23 @@ forbidden_modules = [
 ]
 allow_indirect_imports = true
 
+# --- C5m: motores independentes entre si (task 2.7) -------------------------
+# O que os dois motores compartilham (guarda de valores, mensagens fixas, idioma, histórico, prompt) fica em
+# `motor.comum`, que não conhece nenhum motor.
+[[tool.importlinter.contracts]]
+name = "C5m - motores nativo e n8n independentes entre si"
+type = "independence"
+modules = [
+    "emporio.adaptadores.motor.nativo",
+    "emporio.adaptadores.motor.n8n",
+]
+
+[[tool.importlinter.contracts]]
+name = "C5m - motor.comum nao importa nenhum motor"
+type = "forbidden"
+source_modules = ["emporio.adaptadores.motor.comum"]
+forbidden_modules = ["emporio.adaptadores.motor.nativo", "emporio.adaptadores.motor.n8n"]
+
 # --- C5: adaptadores independentes entre si -------------------------------
 # Fase 2: acrescentar db, redis e motor.n8n quando existirem (api já está).
 [[tool.importlinter.contracts]]

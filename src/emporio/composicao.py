@@ -15,6 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 from pydantic import ValidationError
 
 from emporio.adaptadores.csv import CatalogoCsv, ClientesCsv, PedidosCsv, SolicitacoesJsonl
@@ -23,8 +24,9 @@ from emporio.adaptadores.db import ErroConfiguracaoBanco, RepositoriosPostgres, 
 from emporio.adaptadores.identidade import ErroSegredoJwt, JwtLocal
 from emporio.adaptadores.llm import criar_provedores
 from emporio.adaptadores.memoria import CircuitoStoreMemoria, RateLimiterMemoria, SessaoStoreMemoria
+from emporio.adaptadores.motor.comum.prompt import carregar_politicas
+from emporio.adaptadores.motor.n8n import AgenteN8n
 from emporio.adaptadores.motor.nativo import AgenteNativo
-from emporio.adaptadores.motor.nativo.prompt import carregar_politicas
 from emporio.adaptadores.motor.nativo.roteador import Roteador
 from emporio.adaptadores.observabilidade import criar_telemetria
 from emporio.adaptadores.redis import criar_estado_redis
@@ -59,10 +61,10 @@ from emporio.portas.tenant import ConfigTenant
 
 logger = logging.getLogger(__name__)
 
-MOTORES_DISPONIVEIS: Final = ("nativo",)
-"""Valores aceitos de `MOTOR_ATENDIMENTO` nesta fase."""
-MOTORES_FASE_2: Final = ("n8n",)
-"""Valores previstos, ainda não implementados."""
+MOTORES_DISPONIVEIS: Final = ("nativo", "n8n")
+"""Valores aceitos de `MOTOR_ATENDIMENTO`."""
+MOTORES_FASE_2: Final[tuple[str, ...]] = ()
+"""Valores previstos, ainda não implementados (o `n8n` entrou na task 2.7)."""
 
 _VARIAVEIS_CHAVE: Final = "GROQ_API_KEY, GOOGLE_API_KEY ou ANTHROPIC_API_KEY"
 
@@ -190,7 +192,7 @@ def _explicar_settings(exc: ValidationError) -> str:
 
 
 def _mensagem_motor(valor: str) -> str:
-    if valor in MOTORES_FASE_2:
+    if valor in MOTORES_FASE_2:  # pragma: no cover - nenhum motor pendente hoje
         return f"MOTOR_ATENDIMENTO='{valor}' estará disponível na Fase 2; use 'nativo'."
     aceitos = ", ".join(MOTORES_DISPONIVEIS)
     return f"MOTOR_ATENDIMENTO='{valor}' é desconhecido. Valores aceitos: {aceitos}."
@@ -214,6 +216,9 @@ def montar(
       atual (a raiz do repositório, ou `/app` no container).
     - `telemetria`: porta de métricas/traces injetada nos adapters (padrão: nula).
     - `dir_estado`: onde o modo local grava as solicitações (`<raiz>/var` por padrão).
+
+    Com `MOTOR_ATENDIMENTO=n8n` o motor é o `AgenteN8n` (o LLM fica no workflow): exige `N8N_WEBHOOK_URL` e
+    `JWT_SECRET`, não exige chave de LLM e ignora `provedores`.
     """
     motor_ativo = settings.motor_atendimento
     if motor_ativo not in MOTORES_DISPONIVEIS:
@@ -227,11 +232,14 @@ def montar(
     politicas = {tid: carregar_politicas(_resolver(base, c.politicas_arquivo)) for tid, c in tenants.items()}
 
     relogio_app: Relogio = relogio if relogio is not None else RelogioSistema(settings.data_referencia)
-    if provedores is None:
+    n8n = _config_n8n(settings) if motor_ativo == "n8n" else None
+    if n8n is not None:
+        provedores = {}  # o LLM mora no workflow do n8n: o Python não exige chave
+    elif provedores is None:
         provedores = criar_provedores(
             settings, CircuitoStoreMemoria(), relogio_monotonic=relogio_monotonic, telemetria=telem
         )
-    if not provedores:
+    if n8n is None and not provedores:
         raise ErroSemChaveLLM(
             "Nenhuma chave de LLM configurada. Defina ao menos uma das variáveis "
             f"{_VARIAVEIS_CHAVE} no arquivo de ambiente do projeto (copie o exemplo da raiz) e rode "
@@ -262,26 +270,45 @@ def montar(
         repositorios=repositorios,
         solicitacoes=solicitacoes,
     )
-    motor = AgenteNativo(
-        tenants=tenants,
-        politicas=politicas,
-        roteador=Roteador(provedores, relogio_monotonic=relogio_monotonic, telemetria=telem),
-        ferramentas=ferramentas,
-        sessoes=sessoes,
-        limitador=limitador,
-        relogio=relogio_app,
-        relogio_monotonic=relogio_monotonic,
-        telemetria=telem,
-    )
+    identidade = _identidade_opcional(settings) if n8n is None else n8n.identidade
+    motor: MotorDeAtendimento
+    if n8n is not None:
+        motor = AgenteN8n(
+            webhook_url=n8n.webhook_url,
+            segredo_webhook=n8n.segredo,
+            url_tools=settings.n8n_url_api,
+            tenants=tenants,
+            politicas=politicas,
+            http=httpx.AsyncClient(),  # um cliente (pool de conexões) por aplicação montada
+            identidade=n8n.identidade,
+            circuito=CircuitoStoreMemoria(),
+            sessoes=sessoes,
+            limitador=limitador,
+            relogio=relogio_app,
+            relogio_monotonic=relogio_monotonic,
+            telemetria=telem,
+        )
+    else:
+        motor = AgenteNativo(
+            tenants=tenants,
+            politicas=politicas,
+            roteador=Roteador(provedores, relogio_monotonic=relogio_monotonic, telemetria=telem),
+            ferramentas=ferramentas,
+            sessoes=sessoes,
+            limitador=limitador,
+            relogio=relogio_app,
+            relogio_monotonic=relogio_monotonic,
+            telemetria=telem,
+        )
     return Aplicacao(
         motor=motor,
         motor_ativo=motor_ativo,
         tenants=tenants,
         tenant_padrao=settings.tenant_padrao,
-        provedores=tuple(provedores),
+        provedores=tuple(provedores) if n8n is None else ("n8n",),
         data_referencia=settings.data_referencia,
         telemetria=telem,
-        identidade=_identidade_opcional(settings),
+        identidade=identidade,
         solicitacoes=solicitacoes,
         config_tenants=config_tenants,
         ferramentas=ferramentas,
@@ -332,6 +359,33 @@ def montar_ferramentas(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ConfigN8n:
+    webhook_url: str
+    segredo: str | None
+    identidade: ProvedorIdentidade
+
+
+def _config_n8n(settings: Settings) -> _ConfigN8n:
+    """Valida o que `MOTOR_ATENDIMENTO=n8n` exige, na inicialização: URL do webhook e `JWT_SECRET` (o motor emite o
+    token de serviço com que o workflow chama `/v1/tools/*`). Nunca mostra valores."""
+    url = settings.n8n_webhook_url.get_secret_value().strip() if settings.n8n_webhook_url else ""
+    if not url:
+        raise ErroConfiguracao(
+            "MOTOR_ATENDIMENTO='n8n' exige N8N_WEBHOOK_URL (URL do Webhook do workflow; ver deploy/n8n/README.md)."
+        )
+    if not url.startswith(("http://", "https://")):
+        raise ErroConfiguracao("N8N_WEBHOOK_URL deve começar com http:// ou https://.")
+    try:
+        identidade = montar_identidade(settings)
+    except ErroConfiguracao as erro:
+        raise ErroConfiguracao(f"MOTOR_ATENDIMENTO='n8n': {erro}") from None
+    segredo = settings.n8n_webhook_segredo.get_secret_value().strip() if settings.n8n_webhook_segredo else ""
+    if not segredo:
+        logger.warning("motor n8n: N8N_WEBHOOK_SEGREDO não definido; o webhook fica sem autenticação")
+    return _ConfigN8n(webhook_url=url, segredo=segredo or None, identidade=identidade)
+
+
 def _repositorios_postgres(settings: Settings, tenants: Mapping[str, ConfigTenant]) -> RepositoriosPostgres | None:
     """Postgres quando `DATABASE_URL` existe (Fase 2; migrar antes com `python -m emporio.adaptadores.db.migrar`)."""
     if settings.database_url is None:
@@ -379,7 +433,12 @@ class DiagnosticoLocal:
         s = self._settings
         avisos: list[str] = []
         provedores = self._provedores if self._provedores is not None else s.provedores_com_chave()
-        if not provedores:
+        if s.motor_atendimento == "n8n":
+            if s.n8n_webhook_url is None or not s.n8n_webhook_url.get_secret_value().strip():
+                avisos.append("MOTOR_ATENDIMENTO='n8n' sem N8N_WEBHOOK_URL (ver deploy/n8n/README.md).")
+            if s.jwt_secret is None:
+                avisos.append("MOTOR_ATENDIMENTO='n8n' exige JWT_SECRET (token de serviço das tools).")
+        elif not provedores:
             avisos.append(
                 f"Nenhuma chave de LLM configurada. Defina ao menos uma das variáveis {_VARIAVEIS_CHAVE} "
                 "no arquivo de ambiente do projeto (copie o exemplo da raiz) ou no ambiente do shell."
