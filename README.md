@@ -430,7 +430,7 @@ Algumas das mais visíveis:
 
 ## 6. Qualidade e testes
 
-- **Testes:** `uv run pytest -q` dá 1246 passados e 3 pulados (os `llm_real`, sem chave).
+- **Testes:** `uv run pytest -q` dá 1287 passados e 3 pulados (os `llm_real`, sem chave).
 - **Cobertura** de `src/emporio`: 98%.
 - **Gate estático:** ruff (lint e formatação), mypy em modo strict em `src/`, e import-linter com 14 contratos (C1 a C5).
 - **Quatro camadas de teste:**

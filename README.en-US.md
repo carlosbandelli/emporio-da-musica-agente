@@ -433,7 +433,7 @@ Some of the most visible ones:
 
 ## 6. Quality and tests
 
-- **Tests:** `uv run pytest -q` gives 1246 passed and 3 skipped (the `llm_real` tests, without a key).
+- **Tests:** `uv run pytest -q` gives 1287 passed and 3 skipped (the `llm_real` tests, without a key).
 - **Coverage** of `src/emporio`: 98%.
 - **Static gate:** ruff (lint and formatting), mypy in strict mode on `src/`, and import-linter with 14 contracts (C1 to C5).
 - **Four test layers:**
