@@ -28,6 +28,11 @@ RBAC (arquitetura §8, task 2.5): token `Authorization: Bearer <JWT>` validado p
 - Ordem das checagens: aplicação montada (503) → tenant (400/404) → identidade configurada (503
   `autenticacao_indisponivel`, sem `JWT_SECRET` válido) → token presente e válido (401 + `WWW-Authenticate: Bearer`)
   → permissão (403 `sem_permissao`) → tenant do token igual ao da requisição (403 `tenant_divergente`) → corpo (422).
+- Tools (task 2.6, permissão `tools:usar`): `GET /v1/tools` lista as tools do papel do token (nome, descrição e JSON
+  Schema, os mesmos da `FerramentasLoja.definicoes`); `POST /v1/tools/{nome}` com `{argumentos, session_id?}` executa
+  e devolve `ResultadoTool.para_dict()` (o que o LLM recebe no motor). Falha da tool mantém esse corpo e ganha o
+  status do `codigo_erro`: `tool_desconhecida` 404, `argumentos_invalidos` 422 (o `erro` diz qual campo, para o
+  chamador, em geral um LLM, se corrigir), `tool_nao_permitida` 403, `erro_interno` 500.
 - O token nunca é ecoado nem registrado; respostas admin vão com `Cache-Control: no-store` (dados pessoais).
 
 Sem estado global: a `Aplicacao` montada fica em `app.state`, preenchida no `lifespan`.
@@ -50,9 +55,12 @@ from pydantic import ValidationError
 from emporio.adaptadores.api._esquemas import (
     ConfigEditavel,
     CorpoErro,
+    DefinicaoToolApi,
     ListaSolicitacoes,
+    ListaTools,
     MudancaStatus,
     PedidoChat,
+    PedidoTool,
     RespostaChat,
     SolicitacaoAdmin,
 )
@@ -78,6 +86,7 @@ from emporio.portas import (
     Decisao,
     ErroIdentidade,
     ErroTransicaoStatus,
+    FachadaTools,
     Identidade,
     Idioma,
     MensagemCliente,
@@ -100,6 +109,13 @@ ROTA_DESCONHECIDA: Final = "desconhecida"
 TENANT_DESCONHECIDO: Final = "desconhecido"
 ROTA_METRICAS: Final = "/metrics"
 PREFIXO_ADMIN: Final = "/v1/admin/"
+PREFIXO_TOOLS: Final = "/v1/tools"
+STATUS_POR_CODIGO_TOOL: Final[Mapping[str, int]] = {
+    "tool_desconhecida": 404,
+    "tool_nao_permitida": 403,
+    "argumentos_invalidos": 422,
+    "erro_interno": 500,
+}
 
 
 def _montar_padrao() -> Aplicacao:
@@ -321,7 +337,9 @@ def criar_app(montar_aplicacao: FabricaAplicacao | None = None) -> FastAPI:
     async def _tratar_validacao(request: Request, _: RequestValidationError) -> JSONResponse:
         # Nunca ecoa a entrada (o corpo padrão do FastAPI repete os valores recebidos).
         codigo = (
-            CodigoErro.DADOS_INVALIDOS if request.url.path.startswith(PREFIXO_ADMIN) else CodigoErro.REQUISICAO_INVALIDA
+            CodigoErro.DADOS_INVALIDOS
+            if request.url.path.startswith((PREFIXO_ADMIN, PREFIXO_TOOLS))
+            else CodigoErro.REQUISICAO_INVALIDA
         )
         return JSONResponse(_corpo_erro(codigo, _idioma_de_erro(request)), status_code=422)
 
@@ -383,6 +401,7 @@ def criar_app(montar_aplicacao: FabricaAplicacao | None = None) -> FastAPI:
         return JSONResponse(corpo)
 
     _instalar_admin(app)
+    _instalar_tools(app)
     return app
 
 
@@ -398,6 +417,52 @@ def _respostas_auth(**extras: dict[str, object]) -> dict[int | str, dict[str, ob
     }
     base.update({int(chave.lstrip("_")): valor for chave, valor in extras.items()})
     return base
+
+
+def _instalar_tools(app: FastAPI) -> None:
+    """Tools da loja via HTTP (task 2.6) para motores externos (n8n). Exigem `tools:usar` e token do tenant."""
+
+    def fachada(acesso: _Acesso) -> FachadaTools:
+        ferramentas = acesso.entrada.aplicacao.ferramentas
+        if ferramentas is None:  # pragma: no cover - `montar` sempre preenche
+            raise _ErroApi(503, CodigoErro.INDISPONIVEL, acesso.idioma)
+        return ferramentas
+
+    @app.get(
+        "/v1/tools",
+        response_model=ListaTools,
+        summary="Tools que o papel do token pode usar, com o JSON Schema dos argumentos (permissão `tools:usar`)",
+        responses=_respostas_auth(),
+    )
+    async def listar_tools(acesso: Annotated[_Acesso, Depends(exige(Permissao.TOOLS_USAR))]) -> JSONResponse:
+        definicoes = fachada(acesso).definicoes(acesso.ctx.papel)
+        corpo = ListaTools(
+            tools=[
+                DefinicaoToolApi(nome=d.nome, descricao=d.descricao, parametros=dict(d.parametros)) for d in definicoes
+            ]
+        )
+        return _sem_cache(corpo.model_dump(mode="json"))
+
+    @app.post(
+        "/v1/tools/{nome}",
+        summary="Executa uma tool (permissão `tools:usar`); devolve o mesmo resultado que o LLM recebe no motor",
+        responses=_respostas_auth(
+            _422={
+                "description": "Argumentos inválidos para a tool (corpo: resultado da tool com `codigo_erro`) "
+                "ou corpo malformado."
+            },
+            _404={"description": "Tenant ou tool desconhecida (corpo da tool: `codigo_erro=tool_desconhecida`)."},
+        ),
+    )
+    async def executar_tool(
+        pedido: PedidoTool,
+        acesso: Annotated[_Acesso, Depends(exige(Permissao.TOOLS_USAR))],
+        nome: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")],
+    ) -> JSONResponse:
+        resultado = await fachada(acesso).executar(acesso.ctx, nome, pedido.argumentos, sessao_id=pedido.session_id)
+        status = 200 if resultado.ok else STATUS_POR_CODIGO_TOOL.get(resultado.codigo_erro or "", 500)
+        logger.info("tools: %s por %s ok=%s", nome, acesso.identidade.sub, resultado.ok)
+        return _sem_cache(resultado.para_dict(), status)
 
 
 def _instalar_admin(app: FastAPI) -> None:

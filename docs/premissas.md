@@ -110,3 +110,6 @@ Critério geral: **a regra mais específica vence** e, **na dúvida, o agente n�
 | 124 | Segredo JWT | HS256 fixo; segredo com menos de 32 bytes é tratado como ausente (autenticação desligada: endpoints protegidos → 503). O exemplo do Kubernetes vem vazio. |
 | 125 | Respostas de autenticação | Token inválido ou expirado → o mesmo `401 token_invalido` (não dá pista a quem testa tokens); token presente sem segredo configurado → 503 (não cai em anônimo); `/v1/chat` sem token = cliente anônimo. |
 | 126 | Auditoria de solicitações | `atualizada_em` usa a hora real UTC (não `DATA_REFERENCIA`) e `atualizada_por` o `sub` do token. |
+| 140 | Papel nas tools via HTTP | `GET /v1/tools` e `POST /v1/tools/{nome}` usam o papel do token (`tools:usar`: atendente/gerente) e ignoram qualquer papel no corpo; o n8n usa token de atendente (#121). |
+| 141 | Status HTTP das tools | O status de falha vem do `codigo_erro` da tool (desconhecida 404, argumentos inválidos 422, não permitida 403, erro interno 500) e o corpo continua sendo o `ResultadoTool` (o mesmo texto que o LLM recebe, para quem chama se corrigir). |
+| 142 | `session_id` nas tools via HTTP | Opcional; sem ele, `registrar_solicitacao` usa `sem-sessao`. Idempotência por tenant, sessão, tipo e descrição normalizada, como no chat. Servidor MCP não implementado (opcional). |

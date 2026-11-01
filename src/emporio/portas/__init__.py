@@ -10,6 +10,7 @@ from emporio.portas.estado import (
     ResultadoLimite,
     SessaoStore,
 )
+from emporio.portas.ferramentas import FachadaTools, ResultadoFerramenta
 from emporio.portas.identidade import (
     PERMISSOES_POR_PAPEL,
     Decisao,
@@ -91,6 +92,7 @@ __all__ = [
     "ErroTransicaoStatus",
     "EstadoCircuito",
     "EstadoSessao",
+    "FachadaTools",
     "FiltroProdutos",
     "Identidade",
     "Idioma",
@@ -109,6 +111,7 @@ __all__ = [
     "ResolvedorConfig",
     "RespostaAtendimento",
     "RespostaLLM",
+    "ResultadoFerramenta",
     "ResultadoLimite",
     "SessaoStore",
     "Solicitacao",

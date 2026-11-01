@@ -1,7 +1,7 @@
 """Corpos de entrada e de saída da API (`POST /v1/chat` e endpoints admin), em Pydantic v2."""
 
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -33,6 +33,34 @@ class PedidoChat(BaseModel):
     idioma: Idioma | None = Field(
         default=None, description="Idioma do canal (pt-BR ou en-US). Vence o `Accept-Language`; opcional."
     )
+
+
+class PedidoTool(BaseModel):
+    """Corpo de `POST /v1/tools/{nome}`. Os argumentos são validados pela própria tool (mesmo schema do motor)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    argumentos: dict[str, Any] = Field(default_factory=dict, description="Argumentos da tool (ver `GET /v1/tools`).")
+    session_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="Conversa de origem (usada por `registrar_solicitacao`).",
+    )
+
+
+class DefinicaoToolApi(BaseModel):
+    """Uma tool listada por `GET /v1/tools`: o mesmo nome, descrição e JSON Schema que o LLM recebe."""
+
+    nome: str
+    descricao: str
+    parametros: dict[str, Any]
+
+
+class ListaTools(BaseModel):
+    """Corpo de `GET /v1/tools`."""
+
+    tools: list[DefinicaoToolApi]
 
 
 class RespostaChat(BaseModel):

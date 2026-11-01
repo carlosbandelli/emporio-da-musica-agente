@@ -41,6 +41,7 @@ from emporio.portas import (
     Clientes,
     ConfigTenants,
     DiagnosticoInfo,
+    FachadaTools,
     LLMProvider,
     MotorDeAtendimento,
     Pedidos,
@@ -107,6 +108,8 @@ class Aplicacao:
     """Porta das solicitações para os endpoints admin (o mesmo repositório das tools)."""
     config_tenants: ConfigTenants | None = None
     """Configuração editável dos tenants (em memória do processo)."""
+    ferramentas: FachadaTools | None = None
+    """Fachada de tools (a mesma do motor nativo) para `/v1/tools/*` e motores externos como o n8n."""
 
 
 class ConfigTenantsMemoria:
@@ -250,19 +253,20 @@ def montar(
     solicitacoes: Solicitacoes = (
         repositorios.solicitacoes if repositorios is not None else SolicitacoesJsonl(estado_dir)
     )
+    ferramentas = montar_ferramentas(
+        tenants,
+        raiz=base,
+        relogio=relogio_app,
+        dir_estado=estado_dir,
+        envolver_catalogo=envolver_catalogo,
+        repositorios=repositorios,
+        solicitacoes=solicitacoes,
+    )
     motor = AgenteNativo(
         tenants=tenants,
         politicas=politicas,
         roteador=Roteador(provedores, relogio_monotonic=relogio_monotonic, telemetria=telem),
-        ferramentas=montar_ferramentas(
-            tenants,
-            raiz=base,
-            relogio=relogio_app,
-            dir_estado=estado_dir,
-            envolver_catalogo=envolver_catalogo,
-            repositorios=repositorios,
-            solicitacoes=solicitacoes,
-        ),
+        ferramentas=ferramentas,
         sessoes=sessoes,
         limitador=limitador,
         relogio=relogio_app,
@@ -280,6 +284,7 @@ def montar(
         identidade=_identidade_opcional(settings),
         solicitacoes=solicitacoes,
         config_tenants=config_tenants,
+        ferramentas=ferramentas,
     )
 
 
