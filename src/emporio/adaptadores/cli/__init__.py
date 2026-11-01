@@ -6,8 +6,10 @@ fábricas que montam a aplicação com `LLMFalso`, sem tocar `adaptadores.llm`. 
 Dois modos de `chat`: local (padrão, motor no mesmo processo) e remoto (`--api URL`: cada mensagem vai para
 `POST {URL}/v1/chat` com `X-Tenant-ID` e o `session_id` da execução, via `httpx`; nada é montado localmente).
 
-Códigos de saída: 0 ok; 2 erro de configuração (sem chave, tenant desconhecido, motor inválido, YAML inválido);
-3 API remota inalcançável.
+`token` emite um JWT de teste/admin local (segredo só de `JWT_SECRET`); imprime apenas o token no stdout.
+
+Códigos de saída: 0 ok; 2 erro de configuração (sem chave, tenant desconhecido, motor inválido, YAML inválido, sem
+`JWT_SECRET` válido, papel/validade inválidos); 3 API remota inalcançável.
 """
 
 import asyncio
@@ -32,6 +34,7 @@ from emporio.composicao import (
     carregar_settings,
     montar,
     montar_diagnostico,
+    montar_identidade,
 )
 from emporio.portas import (
     CodigoResposta,
@@ -39,6 +42,7 @@ from emporio.portas import (
     Idioma,
     MensagemCliente,
     Papel,
+    ProvedorIdentidade,
     RespostaAtendimento,
     TenantContext,
 )
@@ -49,9 +53,11 @@ TIMEOUT_API_S = 60.0
 """Acima do deadline de mensagem do tenant (30 s): a API responde com a mensagem fixa antes de a CLI desistir."""
 PERSONA_REMOTA_PADRAO = "Atendente"
 COMANDOS_SAIDA = frozenset({"sair", "exit", "quit"})
+VALIDADE_TOKEN_PADRAO_S = 3600
 
 FabricaAplicacao = Callable[[], Aplicacao]
 FabricaDiagnostico = Callable[[], DiagnosticoLocal]
+FabricaIdentidade = Callable[[], ProvedorIdentidade]
 FabricaClienteHttp = Callable[[str], httpx.AsyncClient]
 """Dada a URL base da API, devolve o cliente HTTP (os testes injetam um transporte ASGI)."""
 Turno = tuple[str, RespostaAtendimento]
@@ -69,6 +75,10 @@ def _montar_padrao() -> Aplicacao:
 
 def _diagnostico_padrao() -> DiagnosticoLocal:
     return montar_diagnostico(carregar_settings())
+
+
+def _identidade_padrao() -> ProvedorIdentidade:
+    return montar_identidade(carregar_settings())
 
 
 def _utf8() -> None:
@@ -93,6 +103,7 @@ def criar_app(
     montar_aplicacao: FabricaAplicacao = _montar_padrao,
     montar_diag: FabricaDiagnostico = _diagnostico_padrao,
     cliente_http: FabricaClienteHttp = _cliente_http_padrao,
+    montar_ident: FabricaIdentidade = _identidade_padrao,
 ) -> typer.Typer:
     """Cria a aplicação Typer com as fábricas injetadas (testes trocam; produção usa a composição real)."""
     app = typer.Typer(
@@ -179,7 +190,34 @@ def criar_app(
         ctx = TenantContext(tenant_id=tenant or servico.tenant_padrao)
         _imprimir_diagnostico(asyncio.run(servico.diagnosticar(ctx)))
 
+    _registrar_token(app, montar_ident)
     return app
+
+
+def _registrar_token(app: typer.Typer, montar_ident: FabricaIdentidade) -> None:
+    """Comando `emporio token`."""
+
+    @app.command()
+    def token(
+        tenant: Annotated[str, typer.Option(help="Tenant do token (claim tenant_id).")],
+        papel: Annotated[
+            list[Papel], typer.Option(case_sensitive=False, help="Papel (claim roles); repita para mais de um.")
+        ],
+        sub: Annotated[str, typer.Option(help="Identificador de quem usa o token (claim sub).")] = "cli-local",
+        expira_em: Annotated[
+            int, typer.Option("--expira-em", help="Validade em segundos (máximo 7 dias).")
+        ] = VALIDADE_TOKEN_PADRAO_S,
+    ) -> None:
+        """Emite um JWT para testes e administração local (segredo só de JWT_SECRET). Imprime só o token."""
+        try:
+            provedor = montar_ident()
+        except ErroConfiguracao as exc:
+            raise _falhar(f"Erro de configuração: {exc}") from None
+        try:
+            emitido = provedor.emitir(sub=sub, tenant_id=tenant, papeis=papel, validade_s=expira_em)
+        except ValueError as exc:
+            raise _falhar(f"Erro: {exc}.") from None
+        typer.echo(emitido)
 
 
 def _cabecalho(aplicacao: Aplicacao, persona: str, ctx: TenantContext, gravar: Path | None) -> None:

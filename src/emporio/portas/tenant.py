@@ -5,10 +5,11 @@ YAML. Só o carregador (`emporio.configuracao`) sabe ler o arquivo.
 """
 
 from collections.abc import Callable
+from typing import Any, Final, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from emporio.portas.contexto import Idioma
+from emporio.portas.contexto import Idioma, TenantContext
 
 
 class _Modelo(BaseModel):
@@ -72,3 +73,59 @@ class ConfigTenant(_Modelo):
 
 ResolvedorConfig = Callable[[str], ConfigTenant]
 """Dado o `tenant_id`, devolve a `ConfigTenant`. Injetado nos casos de uso (o composition root fornece)."""
+
+
+# --- configuração editável (PUT /v1/admin/config) ---------------------------------------------------------------------
+NOME_PERSONA_MAX: Final = 60
+RESUMO_PERSONA_MAX: Final = 2000
+TERMO_MAX: Final = 60
+TERMOS_MAX: Final = 300
+DEADLINE_MAX_S: Final = 120.0
+
+
+class AlteracaoConfig(_Modelo):
+    """Campos que o `gerente` pode mudar. Atualização parcial: campo omitido mantém o valor atual.
+
+    Ficam de fora, de propósito, os campos que tocam isolamento ou o sistema de arquivos (`schema`, `dados_dir`,
+    `politicas_arquivo`), contatos oficiais e idiomas: mudar esses exige deploy (revisão humana).
+    """
+
+    persona: Persona | None = None
+    termos_fora_de_escopo: TermosForaDeEscopo | None = None
+    limites: Limites | None = None
+    deadline_mensagem_s: float | None = Field(default=None, gt=0, le=DEADLINE_MAX_S)
+
+    @model_validator(mode="after")
+    def _validar(self) -> "AlteracaoConfig":
+        if not any(getattr(self, campo) is not None for campo in type(self).model_fields):
+            raise ValueError("informe ao menos um campo")
+        if self.persona is not None:
+            nome, resumo = self.persona.nome.strip(), self.persona.resumo.strip()
+            if not nome or len(nome) > NOME_PERSONA_MAX:
+                raise ValueError(f"persona.nome deve ter de 1 a {NOME_PERSONA_MAX} caracteres")
+            if not resumo or len(resumo) > RESUMO_PERSONA_MAX:
+                raise ValueError(f"persona.resumo deve ter de 1 a {RESUMO_PERSONA_MAX} caracteres")
+        if self.termos_fora_de_escopo is not None:
+            for lista in (self.termos_fora_de_escopo.pt_br, self.termos_fora_de_escopo.en_us):
+                if len(lista) > TERMOS_MAX or any(not t.strip() or len(t) > TERMO_MAX for t in lista):
+                    raise ValueError(f"até {TERMOS_MAX} termos por idioma, cada um com 1 a {TERMO_MAX} caracteres")
+        return self
+
+
+def aplicar_alteracao(atual: ConfigTenant, alteracao: AlteracaoConfig) -> ConfigTenant:
+    """Nova `ConfigTenant` com a alteração aplicada e **revalidada** por inteiro (função pura)."""
+    dados: dict[str, Any] = atual.model_dump(by_alias=True)
+    dados.update(alteracao.model_dump(by_alias=True, exclude_none=True))
+    return ConfigTenant.model_validate(dados)
+
+
+class ConfigTenants(Protocol):
+    """Leitura e edição da configuração do tenant (protótipo: em memória do processo)."""
+
+    async def obter(self, ctx: TenantContext) -> ConfigTenant:
+        """Configuração vigente do tenant do contexto."""
+        ...
+
+    async def atualizar(self, ctx: TenantContext, alteracao: AlteracaoConfig) -> ConfigTenant:
+        """Aplica a alteração validada e devolve a configuração nova."""
+        ...

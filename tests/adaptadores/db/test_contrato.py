@@ -50,3 +50,11 @@ async def test_solicitacoes_idempotente(repos: Repos) -> None:
 
 async def test_solicitacoes_concorrentes_sem_duplicar(repos: Repos) -> None:
     await contrato.verificar_solicitacoes_concorrentes(repos.solicitacoes)
+
+
+async def test_solicitacoes_status(repos: Repos) -> None:
+    await contrato.verificar_solicitacoes_status(repos.solicitacoes, repos.solicitacoes_b)
+
+
+async def test_solicitacoes_filtros(repos: Repos) -> None:
+    await contrato.verificar_solicitacoes_filtros(repos.solicitacoes)

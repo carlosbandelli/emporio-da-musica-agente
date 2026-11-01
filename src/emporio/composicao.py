@@ -6,11 +6,13 @@ fachada de tools e o motor escolhido por `MOTOR_ATENDIMENTO`. Tudo é criado por
 ou cache em variável de módulo.
 """
 
+import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import ValidationError
@@ -18,6 +20,7 @@ from pydantic import ValidationError
 from emporio.adaptadores.csv import CatalogoCsv, ClientesCsv, PedidosCsv, SolicitacoesJsonl
 from emporio.adaptadores.csv._leitura import ler_pedidos, ler_produtos
 from emporio.adaptadores.db import ErroConfiguracaoBanco, RepositoriosPostgres, criar_repositorios_postgres
+from emporio.adaptadores.identidade import ErroSegredoJwt, JwtLocal
 from emporio.adaptadores.llm import criar_provedores
 from emporio.adaptadores.memoria import CircuitoStoreMemoria, RateLimiterMemoria, SessaoStoreMemoria
 from emporio.adaptadores.motor.nativo import AgenteNativo
@@ -33,12 +36,15 @@ from emporio.modulos.comercial.aplicacao import ServicoComercial
 from emporio.modulos.pedidos.aplicacao import ServicoPedidos
 from emporio.modulos.politicas.aplicacao import ServicoPoliticas
 from emporio.portas import (
+    AlteracaoConfig,
     Catalogo,
     Clientes,
+    ConfigTenants,
     DiagnosticoInfo,
     LLMProvider,
     MotorDeAtendimento,
     Pedidos,
+    ProvedorIdentidade,
     RateLimiter,
     Relogio,
     SessaoStore,
@@ -46,8 +52,11 @@ from emporio.portas import (
     Telemetria,
     TelemetriaNula,
     TenantContext,
+    aplicar_alteracao,
 )
 from emporio.portas.tenant import ConfigTenant
+
+logger = logging.getLogger(__name__)
 
 MOTORES_DISPONIVEIS: Final = ("nativo",)
 """Valores aceitos de `MOTOR_ATENDIMENTO` nesta fase."""
@@ -60,6 +69,7 @@ __all__ = [
     "MOTORES_DISPONIVEIS",
     "MOTORES_FASE_2",
     "Aplicacao",
+    "ConfigTenantsMemoria",
     "DiagnosticoDetalhado",
     "DiagnosticoLocal",
     "ErroConfiguracao",
@@ -70,6 +80,7 @@ __all__ = [
     "montar",
     "montar_diagnostico",
     "montar_ferramentas",
+    "montar_identidade",
 ]
 
 
@@ -90,6 +101,58 @@ class Aplicacao:
     data_referencia: datetime | None = None
     telemetria: Telemetria = field(default_factory=TelemetriaNula)
     """Métricas e traces (nula por padrão; `iniciar_observabilidade` cria a real)."""
+    identidade: ProvedorIdentidade | None = None
+    """Validação de tokens (RBAC). `None` = sem `JWT_SECRET` válido: endpoints protegidos respondem 503."""
+    solicitacoes: Solicitacoes | None = None
+    """Porta das solicitações para os endpoints admin (o mesmo repositório das tools)."""
+    config_tenants: ConfigTenants | None = None
+    """Configuração editável dos tenants (em memória do processo)."""
+
+
+class ConfigTenantsMemoria:
+    """Implementa `ConfigTenants` em memória do processo (protótipo; persistir em arquivo/DB é melhoria futura).
+
+    `mapa` é uma visão viva (somente leitura) do dicionário interno: quem a recebe na montagem (API, rate limiter,
+    resolvedor de config dos casos de uso) passa a ver a edição sem remontar nada. Cada réplica tem a sua cópia.
+    """
+
+    def __init__(self, tenants: Mapping[str, ConfigTenant]) -> None:
+        self._tenants: dict[str, ConfigTenant] = dict(tenants)
+        self.mapa: Mapping[str, ConfigTenant] = MappingProxyType(self._tenants)
+
+    async def obter(self, ctx: TenantContext) -> ConfigTenant:
+        """Configuração vigente do tenant."""
+        return obter_tenant(self._tenants, ctx.tenant_id)
+
+    async def atualizar(self, ctx: TenantContext, alteracao: AlteracaoConfig) -> ConfigTenant:
+        """Aplica a alteração (revalidando a config inteira) e troca a entrada do tenant de uma vez."""
+        nova = aplicar_alteracao(obter_tenant(self._tenants, ctx.tenant_id), alteracao)
+        self._tenants[ctx.tenant_id] = nova
+        return nova
+
+
+def montar_identidade(settings: Settings) -> ProvedorIdentidade:
+    """`ProvedorIdentidade` a partir de `JWT_SECRET` (único lugar de onde o segredo vem). Sem segredo válido →
+    `ErroConfiguracao` com mensagem clara (nunca mostra o valor)."""
+    if settings.jwt_secret is None or not settings.jwt_secret.get_secret_value().strip():
+        raise ErroConfiguracao(
+            "JWT_SECRET não definido. Defina um segredo aleatório longo (ao menos 32 bytes) no ambiente para emitir "
+            "e validar tokens."
+        )
+    try:
+        return JwtLocal(settings.jwt_secret)
+    except ErroSegredoJwt as erro:
+        raise ErroConfiguracao(f"JWT_SECRET inválido: {erro}.") from None
+
+
+def _identidade_opcional(settings: Settings) -> ProvedorIdentidade | None:
+    """Na API a identidade é opcional: sem segredo, o chat segue público e só os endpoints protegidos ficam 503."""
+    try:
+        return montar_identidade(settings)
+    except ErroConfiguracao as erro:
+        if settings.jwt_secret is not None:  # definido mas inválido: avisa alto (ausente é o modo local normal)
+            logger.error("identidade desativada: %s", erro)
+        return None
 
 
 def iniciar_observabilidade(settings: Settings) -> Telemetria:
@@ -155,7 +218,8 @@ def montar(
 
     telem: Telemetria = telemetria if telemetria is not None else TelemetriaNula()
     base = raiz if raiz is not None else Path.cwd()
-    tenants = carregar_tenants(_resolver(base, settings.tenants_config))
+    config_tenants = ConfigTenantsMemoria(carregar_tenants(_resolver(base, settings.tenants_config)))
+    tenants = config_tenants.mapa  # visão viva: edições de `PUT /v1/admin/config` aparecem para quem a recebe
     obter_tenant(tenants, settings.tenant_padrao)  # falha cedo com a lista de tenants disponíveis
     politicas = {tid: carregar_politicas(_resolver(base, c.politicas_arquivo)) for tid, c in tenants.items()}
 
@@ -181,6 +245,11 @@ def montar(
     else:
         sessoes, limitador = SessaoStoreMemoria(), RateLimiterMemoria(tenants)
 
+    repositorios = _repositorios_postgres(settings, tenants)
+    estado_dir = dir_estado if dir_estado is not None else base / "var"
+    solicitacoes: Solicitacoes = (
+        repositorios.solicitacoes if repositorios is not None else SolicitacoesJsonl(estado_dir)
+    )
     motor = AgenteNativo(
         tenants=tenants,
         politicas=politicas,
@@ -189,9 +258,10 @@ def montar(
             tenants,
             raiz=base,
             relogio=relogio_app,
-            dir_estado=dir_estado if dir_estado is not None else base / "var",
+            dir_estado=estado_dir,
             envolver_catalogo=envolver_catalogo,
-            repositorios=_repositorios_postgres(settings, tenants),
+            repositorios=repositorios,
+            solicitacoes=solicitacoes,
         ),
         sessoes=sessoes,
         limitador=limitador,
@@ -207,6 +277,9 @@ def montar(
         provedores=tuple(provedores),
         data_referencia=settings.data_referencia,
         telemetria=telem,
+        identidade=_identidade_opcional(settings),
+        solicitacoes=solicitacoes,
+        config_tenants=config_tenants,
     )
 
 
@@ -218,11 +291,13 @@ def montar_ferramentas(
     dir_estado: Path,
     envolver_catalogo: Callable[[Catalogo], Catalogo] | None = None,
     repositorios: RepositoriosPostgres | None = None,
+    solicitacoes: Solicitacoes | None = None,
 ) -> FerramentasLoja:
     """Casos de uso sobre os dados do tenant reunidos na fachada de tools.
 
     Dados: Postgres (schema por tenant) quando `repositorios` é dado; senão CSVs + solicitações em JSONL (modo local).
     `envolver_catalogo`: decorador opcional do catálogo (ex.: cache-aside no Redis, que nunca guarda estoque).
+    `solicitacoes`: repositório já criado (o mesmo que os endpoints admin usam); padrão: o dos dados escolhidos.
     """
 
     def resolver_config(tenant_id: str) -> ConfigTenant:
@@ -231,13 +306,15 @@ def montar_ferramentas(
     catalogo: Catalogo
     pedidos: Pedidos
     clientes: Clientes
-    solicitacoes: Solicitacoes
+    repo_solicitacoes: Solicitacoes
     if repositorios is not None:
         catalogo, pedidos = repositorios.catalogo, repositorios.pedidos
-        clientes, solicitacoes = repositorios.clientes, repositorios.solicitacoes
+        clientes, repo_solicitacoes = repositorios.clientes, repositorios.solicitacoes
     else:
         catalogo, pedidos = CatalogoCsv(tenants, raiz), PedidosCsv(tenants, raiz)
-        clientes, solicitacoes = ClientesCsv(tenants, raiz), SolicitacoesJsonl(dir_estado)
+        clientes, repo_solicitacoes = ClientesCsv(tenants, raiz), SolicitacoesJsonl(dir_estado)
+    if solicitacoes is not None:
+        repo_solicitacoes = solicitacoes
     if envolver_catalogo is not None:
         catalogo = envolver_catalogo(catalogo)
     politicas = ServicoPoliticas(relogio, resolver_config)
@@ -246,7 +323,7 @@ def montar_ferramentas(
         comercial=ServicoComercial(catalogo, politicas),
         pedidos=ServicoPedidos(pedidos, clientes, catalogo, relogio, politicas),
         politicas=politicas,
-        atendimento=ServicoAtendimento(solicitacoes, relogio),
+        atendimento=ServicoAtendimento(repo_solicitacoes, relogio),
     )
 
 

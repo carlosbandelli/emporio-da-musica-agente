@@ -1,10 +1,20 @@
-"""Corpo de entrada e de saída do `POST /v1/chat` (Pydantic v2)."""
+"""Corpos de entrada e de saída da API (`POST /v1/chat` e endpoints admin), em Pydantic v2."""
 
+from datetime import datetime
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from emporio.portas import CodigoResposta, Idioma, RespostaAtendimento
+from emporio.portas import (
+    CodigoResposta,
+    ConfigTenant,
+    Idioma,
+    RespostaAtendimento,
+    Solicitacao,
+    StatusSolicitacao,
+    TipoSolicitacao,
+)
+from emporio.portas.tenant import Limites, Persona
 
 TAMANHO_MAX_CORPO: Final = 20_000
 """Teto de caracteres aceitos na borda (proteção de memória). O limite de negócio é `tamanho_max_mensagem` do tenant,
@@ -59,3 +69,67 @@ class CorpoErro(BaseModel):
 
     codigo: str
     mensagem: str
+
+
+# --- admin (RBAC, task 2.5) ------------------------------------------------------------------------------------------
+class SolicitacaoAdmin(BaseModel):
+    """Uma solicitação vista pela equipe. Sem `chave_idempotencia` (detalhe interno)."""
+
+    id: str
+    tipo: TipoSolicitacao
+    descricao: str
+    sessao_id: str
+    criada_em: datetime
+    contato: str | None = None
+    status: StatusSolicitacao
+    atualizada_em: datetime | None = None
+    atualizada_por: str | None = None
+
+    @classmethod
+    def de(cls, s: Solicitacao) -> "SolicitacaoAdmin":
+        """Converte a entidade."""
+        return cls(
+            id=s.id,
+            tipo=s.tipo,
+            descricao=s.descricao,
+            sessao_id=s.sessao_id,
+            criada_em=s.criada_em,
+            contato=s.contato,
+            status=s.status,
+            atualizada_em=s.atualizada_em,
+            atualizada_por=s.atualizada_por,
+        )
+
+
+class ListaSolicitacoes(BaseModel):
+    """Corpo de `GET /v1/admin/solicitacoes`."""
+
+    solicitacoes: list[SolicitacaoAdmin]
+
+
+class MudancaStatus(BaseModel):
+    """Corpo de `PATCH /v1/admin/solicitacoes/{id}`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: StatusSolicitacao
+
+
+class ConfigEditavel(BaseModel):
+    """Os campos editáveis da configuração do tenant (resposta de `GET`/`PUT /v1/admin/config`)."""
+
+    persona: Persona
+    termos_fora_de_escopo: dict[str, list[str]]
+    limites: Limites
+    deadline_mensagem_s: float
+
+    @classmethod
+    def de(cls, config: ConfigTenant) -> "ConfigEditavel":
+        """Extrai os campos editáveis (com os nomes de idioma `pt-BR`/`en-US`)."""
+        termos = config.termos_fora_de_escopo.model_dump(by_alias=True)
+        return cls(
+            persona=config.persona,
+            termos_fora_de_escopo={k: list(v) for k, v in termos.items()},
+            limites=config.limites,
+            deadline_mensagem_s=config.deadline_mensagem_s,
+        )

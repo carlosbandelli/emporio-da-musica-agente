@@ -10,6 +10,18 @@ from emporio.portas.estado import (
     ResultadoLimite,
     SessaoStore,
 )
+from emporio.portas.identidade import (
+    PERMISSOES_POR_PAPEL,
+    Decisao,
+    ErroIdentidade,
+    ErroTokenExpirado,
+    Identidade,
+    Permissao,
+    ProvedorIdentidade,
+    autorizar,
+    papel_no_tenant,
+    permissoes,
+)
 from emporio.portas.llm import (
     ChamadaTool,
     ConteudoBruto,
@@ -37,22 +49,37 @@ from emporio.portas.motor import (
     MotorDeAtendimento,
     RespostaAtendimento,
 )
-from emporio.portas.repositorios import Catalogo, Clientes, FiltroProdutos, Pedidos, Solicitacoes
+from emporio.portas.repositorios import (
+    Catalogo,
+    Clientes,
+    ErroTransicaoStatus,
+    FiltroProdutos,
+    Pedidos,
+    Solicitacao,
+    Solicitacoes,
+    StatusSolicitacao,
+    TipoSolicitacao,
+)
 from emporio.portas.telemetria import Telemetria, TelemetriaNula
-from emporio.portas.tenant import ConfigTenant, ResolvedorConfig
+from emporio.portas.tenant import AlteracaoConfig, ConfigTenant, ConfigTenants, ResolvedorConfig, aplicar_alteracao
 
 __all__ = [
+    "PERMISSOES_POR_PAPEL",
+    "AlteracaoConfig",
     "Catalogo",
     "ChamadaTool",
     "CircuitoStore",
     "Clientes",
     "CodigoResposta",
     "ConfigTenant",
+    "ConfigTenants",
     "ConteudoBruto",
+    "Decisao",
     "DefinicaoTool",
     "Diagnostico",
     "DiagnosticoInfo",
     "ErroCircuitoAberto",
+    "ErroIdentidade",
     "ErroLLM",
     "ErroLLMAutenticacao",
     "ErroLLMPermanente",
@@ -60,9 +87,12 @@ __all__ = [
     "ErroLLMSemCredito",
     "ErroLLMTransitorio",
     "ErroPrazoEsgotado",
+    "ErroTokenExpirado",
+    "ErroTransicaoStatus",
     "EstadoCircuito",
     "EstadoSessao",
     "FiltroProdutos",
+    "Identidade",
     "Idioma",
     "LLMProvider",
     "MensagemCliente",
@@ -71,6 +101,8 @@ __all__ = [
     "Papel",
     "PapelMensagem",
     "Pedidos",
+    "Permissao",
+    "ProvedorIdentidade",
     "RateLimiter",
     "Relogio",
     "RequisicaoLLM",
@@ -79,9 +111,16 @@ __all__ = [
     "RespostaLLM",
     "ResultadoLimite",
     "SessaoStore",
+    "Solicitacao",
     "Solicitacoes",
+    "StatusSolicitacao",
     "Telemetria",
     "TelemetriaNula",
     "TenantContext",
+    "TipoSolicitacao",
     "UsoTokens",
+    "aplicar_alteracao",
+    "autorizar",
+    "papel_no_tenant",
+    "permissoes",
 ]

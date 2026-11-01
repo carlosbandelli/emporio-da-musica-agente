@@ -179,3 +179,7 @@ def test_seed_com_dados_sujos_igual_ao_csv(banco: URL, tenants: Mapping[str, Con
         asyncio.run(verificar())
     finally:
         repos.fechar()
+
+
+def test_head_inclui_o_status_das_solicitacoes() -> None:
+    assert revisao_head() == "0002"

@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from emporio.configuracao.tenants import carregar_tenants
-from emporio.modulos.atendimento.dominio import Solicitacao
+from emporio.modulos.atendimento.dominio import Solicitacao, StatusSolicitacao, TipoSolicitacao
 from emporio.modulos.catalogo.dominio import Categoria, Produto, Promocao, StatusProduto
 from emporio.modulos.pedidos.dominio import (
     Cliente,
@@ -175,5 +175,24 @@ class SolicitacoesFalso:
     async def registrar(self, ctx: TenantContext, solicitacao: Solicitacao) -> Solicitacao:
         return self.itens.setdefault(solicitacao.chave_idempotencia, solicitacao)
 
-    async def listar(self, ctx: TenantContext) -> tuple[Solicitacao, ...]:
-        return tuple(self.itens.values())
+    async def listar(
+        self,
+        ctx: TenantContext,
+        *,
+        status: StatusSolicitacao | None = None,
+        tipo: TipoSolicitacao | None = None,
+    ) -> tuple[Solicitacao, ...]:
+        return tuple(
+            s
+            for s in self.itens.values()
+            if (status is None or s.status == status) and (tipo is None or s.tipo == tipo)
+        )
+
+    async def atualizar_status(
+        self, ctx: TenantContext, solicitacao_id: str, status: StatusSolicitacao, *, por: str, em: datetime
+    ) -> Solicitacao | None:
+        for chave, atual in self.itens.items():
+            if atual.id == solicitacao_id:
+                self.itens[chave] = nova = atual if atual.status == status else atual.com_status(status, por=por, em=em)
+                return nova
+        return None

@@ -1,9 +1,15 @@
 """Portas de dados: catálogo, pedidos, clientes e solicitações. Todo método recebe o `TenantContext` primeiro."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 
-from emporio.modulos.atendimento.dominio import Solicitacao
+from emporio.modulos.atendimento.dominio import (
+    ErroTransicaoStatus,
+    Solicitacao,
+    StatusSolicitacao,
+    TipoSolicitacao,
+)
 from emporio.modulos.catalogo.dominio import Categoria, Produto, Promocao
 from emporio.modulos.pedidos.dominio import Cliente, Pedido
 from emporio.portas.contexto import TenantContext
@@ -63,6 +69,34 @@ class Solicitacoes(Protocol):
         """Grava a solicitação; idempotente por `chave_idempotencia` (devolve a já existente)."""
         ...
 
-    async def listar(self, ctx: TenantContext) -> tuple[Solicitacao, ...]:
-        """Solicitações registradas do tenant."""
+    async def listar(
+        self,
+        ctx: TenantContext,
+        *,
+        status: StatusSolicitacao | None = None,
+        tipo: TipoSolicitacao | None = None,
+    ) -> tuple[Solicitacao, ...]:
+        """Solicitações registradas do tenant, na ordem de gravação; filtros opcionais por status e tipo."""
         ...
+
+    async def atualizar_status(
+        self, ctx: TenantContext, solicitacao_id: str, status: StatusSolicitacao, *, por: str, em: datetime
+    ) -> Solicitacao | None:
+        """Muda o status (atômico por tenant) e grava quem/quando; `None` se o id não existe no tenant.
+
+        Levanta `ErroTransicaoStatus` se a transição não é permitida pelo domínio (mesmo status é idempotente).
+        """
+        ...
+
+
+__all__ = [
+    "Catalogo",
+    "Clientes",
+    "ErroTransicaoStatus",
+    "FiltroProdutos",
+    "Pedidos",
+    "Solicitacao",
+    "Solicitacoes",
+    "StatusSolicitacao",
+    "TipoSolicitacao",
+]

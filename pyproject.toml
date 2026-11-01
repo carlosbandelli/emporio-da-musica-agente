@@ -158,6 +158,7 @@ forbidden_modules = [
     "redis",
     "fastapi",
     "typer",
+    "jwt",
 ]
 
 # --- C3: um modulo nunca importa o dominio de outro -----------------------
@@ -235,6 +236,9 @@ forbidden_modules = [
     "emporio.adaptadores.memoria",
     "emporio.adaptadores.motor",
     "emporio.adaptadores.observabilidade",
+    "emporio.adaptadores.db",
+    "emporio.adaptadores.redis",
+    "emporio.adaptadores.identidade",
 ]
 allow_indirect_imports = true
 
@@ -254,6 +258,7 @@ modules = [
     "emporio.adaptadores.redis",
     "emporio.adaptadores.db",
     "emporio.adaptadores.observabilidade",
+    "emporio.adaptadores.identidade",
 ]
 # A CLI e a API chegam aos outros adaptadores só através da composição (C4); essa é a única aresta permitida.
 ignore_imports = [

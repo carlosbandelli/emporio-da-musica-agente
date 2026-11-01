@@ -5,9 +5,10 @@ Cada função recebe o(s) repositório(s) e levanta `AssertionError` se o contra
 """
 
 import asyncio
+import dataclasses
 from datetime import UTC, date, datetime
 
-from emporio.modulos.atendimento.dominio import Solicitacao, TipoSolicitacao
+from emporio.modulos.atendimento.dominio import ErroTransicaoStatus, Solicitacao, StatusSolicitacao, TipoSolicitacao
 from emporio.modulos.catalogo.dominio import StatusProduto
 from emporio.modulos.pedidos.dominio import FormaPagamento, MetodoPagamento, StatusPedido
 from emporio.portas import FiltroProdutos, TenantContext
@@ -129,3 +130,62 @@ async def verificar_solicitacoes_idempotente(repo: Solicitacoes, outra_instancia
 async def verificar_solicitacoes_concorrentes(repo: Solicitacoes) -> None:
     await asyncio.gather(*(repo.registrar(CTX, solicitacao_exemplo("k")) for _ in range(8)))
     assert len(await repo.listar(CTX)) == 1
+
+
+# --- status das solicitações (task 2.5) ------------------------------------------------------------------------------
+QUANDO = datetime(2026, 3, 10, 15, 0, tzinfo=UTC)
+
+
+async def verificar_solicitacoes_status(repo: Solicitacoes, outra_instancia: Solicitacoes) -> None:
+    """Fluxo aberta → em_atendimento → resolvida, auditoria gravada, idempotência e transição inválida."""
+    await repo.registrar(CTX, solicitacao_exemplo("k1"))
+    await repo.registrar(CTX, solicitacao_exemplo("k2"))
+    assert (await repo.listar(CTX))[0].status is StatusSolicitacao.ABERTA
+
+    em_atendimento = await repo.atualizar_status(CTX, "id-k1", StatusSolicitacao.EM_ATENDIMENTO, por="ana", em=QUANDO)
+    assert em_atendimento is not None
+    assert (em_atendimento.status, em_atendimento.atualizada_por) == (StatusSolicitacao.EM_ATENDIMENTO, "ana")
+    assert em_atendimento.atualizada_em == QUANDO
+
+    depois = QUANDO.replace(hour=16)
+    resolvida = await repo.atualizar_status(CTX, "id-k1", StatusSolicitacao.RESOLVIDA, por="bia", em=depois)
+    assert resolvida is not None and resolvida.status is StatusSolicitacao.RESOLVIDA
+    # Mesmo status: idempotente, sem mudar a auditoria.
+    de_novo = await repo.atualizar_status(CTX, "id-k1", StatusSolicitacao.RESOLVIDA, por="caio", em=QUANDO)
+    assert de_novo == resolvida
+
+    try:
+        await repo.atualizar_status(CTX, "id-k1", StatusSolicitacao.ABERTA, por="ana", em=QUANDO)
+    except ErroTransicaoStatus:
+        pass
+    else:
+        raise AssertionError("resolvida -> aberta deveria ser recusada")
+
+    assert await repo.atualizar_status(CTX, "nao-existe", StatusSolicitacao.RESOLVIDA, por="ana", em=QUANDO) is None
+
+    listadas = await outra_instancia.listar(CTX)  # persistido no armazenamento
+    assert [(s.id, s.status) for s in listadas] == [
+        ("id-k1", StatusSolicitacao.RESOLVIDA),
+        ("id-k2", StatusSolicitacao.ABERTA),
+    ]
+    assert dataclasses.replace(listadas[0]) == resolvida
+    # Registrar de novo a mesma chave devolve a já existente com o status atual (não reabre).
+    assert (await repo.registrar(CTX, solicitacao_exemplo("k1"))).status is StatusSolicitacao.RESOLVIDA
+
+
+async def verificar_solicitacoes_filtros(repo: Solicitacoes) -> None:
+    await repo.registrar(CTX, solicitacao_exemplo("k1"))
+    await repo.registrar(CTX, dataclasses.replace(solicitacao_exemplo("k2"), id="id-k2", tipo=TipoSolicitacao.OUTROS))
+    await repo.registrar(CTX, solicitacao_exemplo("k3"))
+    await repo.atualizar_status(CTX, "id-k3", StatusSolicitacao.EM_ATENDIMENTO, por="ana", em=QUANDO)
+
+    def ids(itens: tuple[Solicitacao, ...]) -> list[str]:
+        return [s.id for s in itens]
+
+    assert ids(await repo.listar(CTX)) == ["id-k1", "id-k2", "id-k3"]
+    assert ids(await repo.listar(CTX, status=StatusSolicitacao.ABERTA)) == ["id-k1", "id-k2"]
+    assert ids(await repo.listar(CTX, tipo=TipoSolicitacao.OUTROS)) == ["id-k2"]
+    assert ids(await repo.listar(CTX, status=StatusSolicitacao.EM_ATENDIMENTO, tipo=TipoSolicitacao.RECLAMACAO)) == [
+        "id-k3"
+    ]
+    assert await repo.listar(CTX, status=StatusSolicitacao.RESOLVIDA) == ()

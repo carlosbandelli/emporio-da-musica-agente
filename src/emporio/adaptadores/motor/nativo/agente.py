@@ -117,7 +117,8 @@ class AgenteNativo:
         if max_iteracoes < 1:
             raise ValueError("max_iteracoes deve ser pelo menos 1")
         self._telemetria: Telemetria = telemetria if telemetria is not None else TelemetriaNula()
-        self._tenants = dict(tenants)
+        # Referência viva (não cópia): edições de config pelo admin (PUT /v1/admin/config) valem no turno seguinte.
+        self._tenants = tenants
         self._politicas = dict(politicas)
         self._roteador = roteador
         self._ferramentas = ferramentas
@@ -128,7 +129,6 @@ class AgenteNativo:
         self._max_iteracoes = max_iteracoes
         self._ttl_sessao_s = ttl_sessao_s
         self._max_historico = max_mensagens_historico
-        self._cacheavel: dict[str, str] = {}
 
     async def responder(self, ctx: TenantContext, sessao_id: str, mensagem: MensagemCliente) -> RespostaAtendimento:
         """Responde a uma mensagem do cliente. Nunca lança exceção (I4)."""
@@ -248,7 +248,8 @@ class AgenteNativo:
         if turno.nivel is not None:
             self._telemetria.roteamento(ctx.tenant_id, str(turno.nivel))
         prompt = montar_prompt(config, manual, ctx.idioma, self._relogio.agora().astimezone(FUSO_LOJA).date())
-        cacheavel = self._cacheavel.setdefault(ctx.tenant_id, prompt.cacheavel)
+        # `montar_prompt` é determinístico: mesma config → bloco cacheável idêntico byte a byte (premissa #42).
+        cacheavel = prompt.cacheavel
         tools = self._ferramentas.definicoes(ctx.papel)
         turno.novas.append(MensagemLLM(PapelMensagem.USER, texto))
         corrigiu = False

@@ -103,3 +103,10 @@ Critério geral: **a regra mais específica vence** e, **na dúvida, o agente n�
 | 133 | Testes na CI | Postgres como serviço do Actions via `TEST_DATABASE_URL`; Redis por fakeredis/testcontainers; nenhuma chave de LLM necessária. |
 | 134 | Deploy na CI | Scan e deploy só com a variável de repositório `DEPLOY_ENABLED=true` (sem cluster nesta entrega). |
 | 135 | Build no Windows com acento no caminho | O BuildKit rejeita o caminho com acento (`Técnico`); contorno documentado no README: buildar de uma cópia em pasta ASCII e subir com `--no-build`. |
+| 120 | Papel `admin_plataforma` | Só `tenants:criar` e `metricas:ler` (menor privilégio: não lê solicitações com dados pessoais, não edita config de loja, não usa o chat); não há curinga de tenant. |
+| 121 | Quem usa tools via HTTP | `tools:usar` fica com atendente e gerente; a credencial de serviço do n8n (task 2.7) é um token de atendente do tenant. |
+| 122 | Status das solicitações | `aberta → em_atendimento → resolvida`; repetir o status é idempotente; de `resolvida` só se volta a `em_atendimento`. |
+| 123 | Edição de config pelo admin | `PUT /v1/admin/config` é parcial (persona, termos fora de escopo, limites, deadline; `schema`, `dados_dir` e `politicas_arquivo` recusados) e vale em memória do processo (cada réplica com a sua); o motor lê a config viva no turno seguinte. Persistir em arquivo/banco é melhoria futura. |
+| 124 | Segredo JWT | HS256 fixo; segredo com menos de 32 bytes é tratado como ausente (autenticação desligada: endpoints protegidos → 503). O exemplo do Kubernetes vem vazio. |
+| 125 | Respostas de autenticação | Token inválido ou expirado → o mesmo `401 token_invalido` (não dá pista a quem testa tokens); token presente sem segredo configurado → 503 (não cai em anônimo); `/v1/chat` sem token = cliente anônimo. |
+| 126 | Auditoria de solicitações | `atualizada_em` usa a hora real UTC (não `DATA_REFERENCIA`) e `atualizada_por` o `sub` do token. |
