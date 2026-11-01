@@ -225,4 +225,5 @@ modules = [
     "emporio.adaptadores.llm",
     "emporio.adaptadores.csv",
     "emporio.adaptadores.memoria",
+    "emporio.adaptadores.relogio",
 ]
