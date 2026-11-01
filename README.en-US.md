@@ -2,6 +2,8 @@
 
 # Empório da Música: Sônia, the customer service agent
 
+> Process: [project board (3 epics, 9 stories, 29 tasks)](https://github.com/users/carlosbandelli/projects/4) · details in [How it was built](#how-it-was-built-process-and-board).
+
 Text-based customer service agent for **Empório da Música**, a fictional musical instrument store in Campo Grande/MS,
 Brazil. The assistant is called **Sônia**. She answers questions about price, stock, orders, opening hours, address,
 installments, returns, warranty and shipping. Data comes from tools (CSV files or Postgres), and rules come from the
@@ -537,6 +539,18 @@ In priority order:
 ---
 
 ## 9. How I used AI coding assistants
+
+### How it was built: process and board
+
+All the work was planned and tracked on the **[GitHub Project (board)](https://github.com/users/carlosbandelli/projects/4)**, with Todo → Doing → Done columns. Each item is a repository issue, linked as a sub-issue (Epic → Story → Task); each task commit closes its issue with `Closes #N`, so the board history and the git history tell the same story. The full plan, with acceptance criteria and the closing record of each Story, is in [`Plans.md`](Plans.md).
+
+| Level | Count | Items |
+|---|---|---|
+| Epics | 3 | E1 Core, E2 Extras, E3 Delivery |
+| Stories | 9 | S1.A Foundation, S1.B Business rules, S1.C Agent, S1.D Interface and core delivery, S2.A API and security, S2.B Data infrastructure, S2.C Observability and deploy, S2.D Engines and payment, S3.A Diagrams, review and publication |
+| Tasks | 29 | 17 in Phase 1 (1.0–1.16), 9 in Phase 2 (2.1–2.9) and 3 in Phase 3 (3.0–3.2) |
+
+There are 41 issues in total (#1–#41) and about 70 incremental commits, between 2026-10-31 and 2026-11-01, with no squash and no force-push.
 
 ### Tools
 

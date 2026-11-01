@@ -2,6 +2,8 @@
 
 # Empório da Música: agente de atendimento Sônia
 
+> Processo: [board do projeto (3 epics, 9 stories, 29 tasks)](https://github.com/users/carlosbandelli/projects/4) · detalhes em [Como foi feito](#como-foi-feito-processo-e-board).
+
 Agente de atendimento por texto da **Empório da Música**, loja fictícia de instrumentos musicais em Campo Grande/MS.
 A assistente se chama **Sônia**. Ela responde sobre preço, estoque, pedido, horário, endereço, parcelamento, devolução,
 garantia e frete. Os dados vêm de ferramentas (CSVs ou Postgres) e as regras, do manual de políticas. A loja não vende
@@ -531,6 +533,18 @@ Em ordem de prioridade:
 ---
 
 ## 9. Como usei assistentes de IA
+
+### Como foi feito: processo e board
+
+Todo o trabalho foi planejado e acompanhado no **[GitHub Project (board)](https://github.com/users/carlosbandelli/projects/4)**, com as colunas Todo → Doing → Done. Cada item é uma issue do repositório, ligada como sub-issue (Epic → Story → Task); cada commit de task fecha a sua issue com `Closes #N`, então o histórico do board e o do git contam a mesma história. O plano completo, com critérios de aceite e o registro de fechamento de cada Story, está em [`Plans.md`](Plans.md).
+
+| Nível | Quantidade | Itens |
+|---|---|---|
+| Epics | 3 | E1 Núcleo, E2 Extras, E3 Entrega |
+| Stories | 9 | S1.A Fundação, S1.B Regras de negócio, S1.C Agente, S1.D Interface e entrega do núcleo, S2.A API e segurança, S2.B Infra de dados, S2.C Observabilidade e deploy, S2.D Motores e pagamento, S3.A Diagramas, revisão e publicação |
+| Tasks | 29 | 17 da Fase 1 (1.0–1.16), 9 da Fase 2 (2.1–2.9) e 3 da Fase 3 (3.0–3.2) |
+
+São 41 issues no total (#1–#41) e cerca de 70 commits incrementais, entre 2026-10-31 e 2026-11-01, sem squash nem force-push.
 
 ### Ferramentas
 
