@@ -31,7 +31,7 @@ from emporio.portas.llm import (
     UsoTokens,
 )
 
-MODELO_PADRAO = "gemini-flash-latest"
+MODELO_PADRAO = "gemini-2.5-flash"
 MAX_TOKENS_MINIMO = 8192
 _LIMITE_DETALHE = 300
 _HTTP_BAD_REQUEST = 400

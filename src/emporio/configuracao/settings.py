@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     modelo_claude: str = "claude-opus-5-5"
     esforco_claude: Literal["low", "medium", "high", "xhigh", "max"] = "low"
     claude_fallback_servidor: bool = True
-    modelo_gemini: str = "gemini-flash-latest"
+    modelo_gemini: str = "gemini-2.5-flash"
     modelo_groq: str = "openai/gpt-oss-120b"
     # `reasoning_effort` do Groq; só modelos que raciocinam aceitam (gpt-oss, qwen3). `None` = não envia.
     esforco_groq: Literal["low", "medium", "high"] | None = "low"

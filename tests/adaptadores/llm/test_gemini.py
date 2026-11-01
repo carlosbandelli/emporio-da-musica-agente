@@ -78,7 +78,7 @@ async def test_requisicao_tools_e_system() -> None:
     servidor = Servidor(ok([{"text": "Oi!"}]))
     p: LLMProvider = provedor(servidor)
     resp = await p.gerar(requisicao(tools=TOOLS))
-    assert servidor.urls[0].endswith("/models/gemini-flash-latest:generateContent")
+    assert servidor.urls[0].endswith("/models/gemini-2.5-flash:generateContent")
     corpo = servidor.corpos[0]
     assert corpo["systemInstruction"]["parts"] == [{"text": "manual da loja\n\ndata: 2026-03-10"}]
     assert corpo["contents"] == [{"role": "user", "parts": [{"text": "oi"}]}]

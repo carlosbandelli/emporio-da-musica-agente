@@ -29,7 +29,7 @@ def test_settings_modelos_padrao() -> None:
     assert s.modelo_claude == "claude-opus-5-5"
     assert s.esforco_claude == "low"
     assert s.claude_fallback_servidor is True
-    assert s.modelo_gemini == "gemini-flash-latest"
+    assert s.modelo_gemini == "gemini-2.5-flash"
     assert s.modelo_groq == "openai/gpt-oss-120b"
     assert s.esforco_groq == "low"
 
