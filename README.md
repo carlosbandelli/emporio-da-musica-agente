@@ -532,6 +532,21 @@ Em ordem de prioridade:
 
 ## 9. Como usei assistentes de IA
 
+### Ferramentas
+
+| Ferramenta | Para que serviu |
+|---|---|
+| [Claude Code](https://claude.com/claude-code) + plugin [claude-code-harness](https://github.com/Chachamaru127/claude-code-harness) | **Principal.** O Claude Code orquestrou o projeto inteiro. O harness deu o fluxo de trabalho: `harness-plan` para escrever o `Plans.md` (fases, tasks, critérios de aceite, agente de cada task) e `harness-work` para executar por faixa de tasks, com revisão entre as faixas. |
+| [Agentes especialistas (VoltAgent/awesome-claude-code-subagents)](https://github.com/VoltAgent/awesome-claude-code-subagents) | Subagentes do Claude Code, cada um com foco numa área (`python-pro`, `llm-architect`, `postgres-pro`, `security-engineer`...). Cada task foi entregue por um deles (tabela abaixo). |
+| [code-review-graph](https://github.com/tirth8205/code-review-graph) | Grafo do código (Tree-sitter) consultado via MCP. Usado para revisar a entrega de cada subagente lendo só o que o grafo apontava, medir o raio de impacto antes de mexer em código compartilhado e, ao fechar cada Story/Epic, conferir acoplamento e as regras C1–C5 (números abaixo). |
+| [token-optimizer](https://github.com/alexgreensh/token-optimizer) | Plugin do Claude Code que monitora o uso de contexto e tokens da sessão e guarda checkpoints para retomar o trabalho entre sessões sem perder o estado. |
+
+Bibliotecas Python do projeto (justificativas na seção 4):
+- **Execução:** `typer` (CLI), `fastapi` + `uvicorn` (API), `pydantic` + `pydantic-settings` (modelos e configuração), `groq`, `google-genai`, `anthropic` (SDKs de LLM), `tenacity` (retry), `httpx` (HTTP), `sqlalchemy` + `psycopg` + `alembic` (Postgres e migrações), `redis`, `pyjwt` (RBAC), `prometheus-client`, `opentelemetry-sdk` + `opentelemetry-exporter-otlp-proto-http` (observabilidade), `babel` (formato de moeda), `holidays` (feriados), `pyyaml`, `tzdata`.
+- **Desenvolvimento:** `pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `mypy`, `import-linter` (regras C1–C5), `fakeredis`, `testcontainers` (Postgres/Redis reais nos testes), `asgi-lifespan`, `types-pyyaml`.
+
+### Fluxo
+
 Usei o Claude Code como orquestrador do projeto inteiro. O fluxo foi este:
 
 1. **Plano antes da execução.** Escrevi o plano junto com o assistente: `Plans.md`, com fases, tasks, critérios de

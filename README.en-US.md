@@ -538,6 +538,21 @@ In priority order:
 
 ## 9. How I used AI coding assistants
 
+### Tools
+
+| Tool | What it was used for |
+|---|---|
+| [Claude Code](https://claude.com/claude-code) + [claude-code-harness](https://github.com/Chachamaru127/claude-code-harness) plugin | **Main tool.** Claude Code orchestrated the whole project. The harness provided the workflow: `harness-plan` to write `Plans.md` (phases, tasks, acceptance criteria, the agent for each task) and `harness-work` to run ranges of tasks, with a review between ranges. |
+| [Specialist agents (VoltAgent/awesome-claude-code-subagents)](https://github.com/VoltAgent/awesome-claude-code-subagents) | Claude Code subagents, each focused on one area (`python-pro`, `llm-architect`, `postgres-pro`, `security-engineer`...). Each task was delivered by one of them (table below). |
+| [code-review-graph](https://github.com/tirth8205/code-review-graph) | A graph of the code (Tree-sitter) queried over MCP. Used to review each subagent's delivery by reading only what the graph pointed to, to measure the impact radius before changing shared code and, when closing each Story/Epic, to check coupling and rules C1–C5 (numbers below). |
+| [token-optimizer](https://github.com/alexgreensh/token-optimizer) | Claude Code plugin that tracks the session's context and token usage and saves checkpoints to resume work across sessions without losing state. |
+
+Python libraries in the project (rationale in section 4):
+- **Runtime:** `typer` (CLI), `fastapi` + `uvicorn` (API), `pydantic` + `pydantic-settings` (models and configuration), `groq`, `google-genai`, `anthropic` (LLM SDKs), `tenacity` (retry), `httpx` (HTTP), `sqlalchemy` + `psycopg` + `alembic` (Postgres and migrations), `redis`, `pyjwt` (RBAC), `prometheus-client`, `opentelemetry-sdk` + `opentelemetry-exporter-otlp-proto-http` (observability), `babel` (currency format), `holidays` (public holidays), `pyyaml`, `tzdata`.
+- **Development:** `pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `mypy`, `import-linter` (rules C1–C5), `fakeredis`, `testcontainers` (real Postgres/Redis in tests), `asgi-lifespan`, `types-pyyaml`.
+
+### Workflow
+
 I used Claude Code as the orchestrator for the whole project. The workflow was:
 
 1. **Plan before execution.** I wrote the plan together with the assistant: `Plans.md`, with phases, tasks, acceptance
