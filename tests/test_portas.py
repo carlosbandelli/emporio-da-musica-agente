@@ -9,16 +9,23 @@ from emporio.modulos.atendimento.dominio import Solicitacao, TipoSolicitacao
 from emporio.modulos.catalogo.dominio import Produto, StatusProduto
 from emporio.modulos.pedidos.dominio import FormaPagamento, MetodoPagamento, Pedido, StatusPedido
 from emporio.portas import (
+    ConteudoBruto,
+    ErroCircuitoAberto,
     ErroLLM,
+    ErroLLMAutenticacao,
     ErroLLMPermanente,
+    ErroLLMRecusa,
     ErroLLMTransitorio,
+    ErroPrazoEsgotado,
     FiltroProdutos,
     Idioma,
     MensagemCliente,
     MensagemLLM,
     MotorDeAtendimento,
     PapelMensagem,
+    RequisicaoLLM,
     RespostaAtendimento,
+    RespostaLLM,
     TenantContext,
 )
 
@@ -36,6 +43,23 @@ def test_erros_llm_hierarquia() -> None:
     assert erro.retry_after_s == 2.0
     assert issubclass(ErroLLMPermanente, ErroLLM)
     assert not issubclass(ErroLLMPermanente, ErroLLMTransitorio)
+
+
+def test_erros_llm_extensoes_aditivas() -> None:
+    assert issubclass(ErroCircuitoAberto, ErroLLMTransitorio)
+    assert issubclass(ErroPrazoEsgotado, ErroLLMTransitorio)
+    assert issubclass(ErroLLMAutenticacao, ErroLLMPermanente)
+    assert issubclass(ErroLLMRecusa, ErroLLMPermanente)
+    assert ErroCircuitoAberto("aberto").retry_after_s is None
+
+
+def test_campos_aditivos_da_porta_llm_tem_padrao() -> None:
+    msg = MensagemLLM(PapelMensagem.ASSISTANT, "oi")
+    assert (msg.erro_tool, msg.bruto) == (False, None)
+    assert RequisicaoLLM("a", "b", (msg,)).prazo_monotonic is None
+    bruto = ConteudoBruto("claude", ({"type": "text", "text": "oi"},))
+    assert RespostaLLM("oi", "claude", "m", bruto=bruto).bruto == bruto
+    assert RespostaLLM("oi", "claude", "m").bruto is None
 
 
 def test_filtro_produtos_so_ativos_por_padrao() -> None:

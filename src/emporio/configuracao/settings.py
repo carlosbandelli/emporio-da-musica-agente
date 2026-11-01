@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     tenants_config: Path = Path("config/tenants.yaml")
     tenant_padrao: str = "emporio"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # Modelos por provedor (premissas propostas na task 1.8; validação com chave real nas tasks 1.14/1.16).
+    modelo_claude: str = "claude-opus-5-5"
+    esforco_claude: Literal["low", "medium", "high", "xhigh", "max"] = "low"
+    claude_fallback_servidor: bool = True
+    modelo_gemini: str = "gemini-flash-latest"
+    modelo_groq: str = "openai/gpt-oss-120b"
+    # `reasoning_effort` do Groq; só modelos que raciocinam aceitam (gpt-oss, qwen3). `None` = não envia.
+    esforco_groq: Literal["low", "medium", "high"] | None = "low"
 
     def provedores_com_chave(self) -> tuple[str, ...]:
         """Nomes dos provedores de LLM com chave configurada (nunca os valores)."""
