@@ -28,6 +28,8 @@ Convenções:
 | | S2.D Motores e pagamento | 2.7, 2.9 | `adaptadores/motor/n8n`, gateway fake |
 | E3 Entrega | S3.A Diagramas, revisão e publicação | 3.0–3.2 | — |
 
+GitHub: [Project #4](https://github.com/users/carlosbandelli/projects/4) (Todo → Doing → Done). Issues: epics #1–#3, stories #4–#12, tasks #13–#41 na ordem do plano (1.0 = #13 … 1.16 = #29, 2.1 = #30 … 2.9 = #38, 3.0 = #39 … 3.2 = #41), ligadas como sub-issues. Ao iniciar uma task: issue em Doing; ao concluir: commit com `Closes #N` e item em Done.
+
 ### code-review-graph (combinado com o usuário em 2026-11-01)
 
 - **Quando atualizar**: (a) ao concluir uma task que fecha um módulo ou adapter da tabela acima; (b) ao fechar cada Story;
