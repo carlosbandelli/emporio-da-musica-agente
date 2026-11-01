@@ -1,0 +1,30 @@
+# Segredos e configuração local de MCP (contém token do GitHub)
+.mcp.json
+.env
+.env.*
+!.env.example
+
+# Configurações locais do Claude Code
+.claude/settings.local.json
+
+# Grafo do code-review-graph
+.code-review-graph/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Enunciado do processo seletivo (material da Artefact, não publicar)
+desafio_tecnico_ai_eng_artefact.pdf

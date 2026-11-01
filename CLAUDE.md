@@ -1,0 +1,74 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project status
+
+This is a technical challenge (Artefact, AI Engineer 2026). No code exists yet: the repo has only the brief
+(`desafio_tecnico_ai_eng_artefact.pdf`) and the input data in `data/`. Once code, a dependency manifest and
+run/test commands exist, add them to this file.
+
+## The task
+
+Build a **Python** text-message customer-service agent for **Empório da Música**, a fictional musical-instrument
+store in Campo Grande/MS. User-facing text defaults to **Brazilian
+Portuguese**. The README is bilingual: `README.md` (pt-BR, primary) and `README.en-US.md` (en-US), kept in sync,
+each linking to the other at the top. Architecture decisions live in `docs/arquitetura.md`; assumptions about
+ambiguities in `docs/premissas.md`. The agent must:
+
+- Use a persona matching the store's tone. Manual §7.1: informal but professional, like a friend who knows music,
+  not robotic.
+- Decide when to query **data** (prices, stock, order status, promotions) and when to consult **policies**
+  (returns, hours, payment, shipping, warranty).
+- Handle out-of-scope requests. The store sells only instruments, **no accessories** (strings, picks, cables, cases,
+  pedals, amps). Redirect these politely.
+
+Python is the only hard constraint. Framework, LLM provider, interface (CLI/notebook/API/UI), history
+persistence and data cleaning are free choices, but each one **must be justified in README.md**.
+
+### Deliverables (these shape how to work)
+
+- A public GitHub repo with **real incremental commit history**. Do not squash everything into one commit or force-push.
+- A README.md with: setup/run instructions (env, model provider, commands), justification of technical decisions
+  (framework, LLM, retrieval architecture, prompt strategy), known limitations and what you'd do with more time,
+  and **how AI coding assistants were used** (workflow).
+- 3–5 example conversations (`.md`/`.txt`/image). At least one must be non-trivial: live data lookup or applying a
+  policy rule. Suggested scenarios: violões up to R$1000, store address, price of "Takamine GD20", "me arrependi da
+  compra, posso devolver?".
+- If the brief is ambiguous, pick a reasonable interpretation and **document the assumption in the README**.
+
+## Data (`data/`)
+
+The CSV filenames contain spaces and a common prefix: `desafio_tecnico_ai_eng - <table>.csv`. Quote paths.
+
+- `products.csv` (65 rows): `product_id, price_brl, name, category_id, description, stock_quantity, status, specs, created_at`.
+  `status` ∈ {active, discontinued, coming_soon}. `specs` is a JSON string (top, strings, electronics, color, …).
+  IDs start at 81, not 1.
+- `categories.csv`: 9 categories, but products exist only in 1–5 and 9. Categories 6–8 (sopros, cordas orquestrais)
+  have **no products**.
+- `promotions.csv`: `product_id, discount_percent, description, is_active`. Most are inactive. A product can have
+  several rows (e.g. 93, 96, 99). Only `is_active=1` applies.
+- `orders.csv`: `status` ∈ {pending, confirmed, shipped, delivered, cancelled}. `tracking_code`/`estimated_delivery`
+  exist only once shipped. `notes` holds the cancellation reasons. `payment_method` is encoded (`pix`, `debit`,
+  `boleto`, `credit_Nx`).
+- `order_items.csv`: `order_id, quantity, product_id` (no unit price).
+- `customers.csv`: name, phone, email, city (PII, so think about how an order lookup verifies identity).
+
+`data/políticas_da_loja.pdf` is an 8-page policy manual (v2.1). It is short enough to fit fully in a prompt, so
+weigh that against chunked RAG. Business rules the agent must apply correctly:
+
+- Hours: Mon–Fri 09–18, Sat 09–13, Sun/holidays closed. Outside business hours, tell the customer when the store reopens.
+- PIX gives a 5% discount, **but not on top of a promotional price**. Promotions don't stack. Show promo prices
+  alongside the original price and the % off.
+- Installments: up to 12x interest-free with tiered minimums (≤3x; 4–6x min R$80; 7–12x min R$100). Payment methods
+  can be combined above R$2000.
+- Returns: 7 days after receipt (online, regret). Defects: 30 days. Preference swap: 7 days. Non-eligible items listed in §4.4.
+- Shipping: free in metro Campo Grande above R$500, otherwise R$35. Other cities use PAC/SEDEX/Jadlog.
+- Never state price, stock or delivery times without querying the data. Out of stock: suggest alternatives.
+  Discontinued: offer equivalents. Expired promo: say so and give the current price.
+
+Known inconsistencies in the source material (document whichever choice you make):
+
+- Phone: (67) 3341-4444 on the cover/§1.2 vs WhatsApp (67) 3321-4500 in §7.
+- Email: `contato@emporiodamusica.com.br` (cover) vs `contato@empóriodamusica.com.br` (§1.2, with accent).
+- Order dates run up to 2026-03, so "today" affects return-window and hours answers.
