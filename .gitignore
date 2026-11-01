@@ -38,3 +38,6 @@ Thumbs.db
 
 # Enunciado do processo seletivo (material da Artefact, não publicar)
 desafio_tecnico_ai_eng_artefact.pdf
+
+# Worktrees dos subagentes do harness
+.harness-worktrees/

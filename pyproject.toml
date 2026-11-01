@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Agente de atendimento por texto (Sônia) da Empório da Música."
 requires-python = ">=3.12"
 dependencies = [
+    "pydantic>=2.14.2",
+    "pydantic-settings>=2.16.2",
+    "pyyaml>=6.0.3",
     "typer>=0.12",
 ]
 
@@ -22,6 +25,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "import-linter>=2.1",
+    "types-pyyaml>=6.0.12.20261030",
 ]
 
 # ---------------------------------------------------------------------------
@@ -96,6 +100,7 @@ type = "forbidden"
 source_modules = ["emporio.portas"]
 forbidden_modules = [
     "emporio.adaptadores",
+    "emporio.configuracao",
     "emporio.composicao",
     "emporio.modulos.*.aplicacao",
 ]
@@ -104,7 +109,7 @@ forbidden_modules = [
 name = "C1c - modulos nao importam adaptadores nem composicao"
 type = "forbidden"
 source_modules = ["emporio.modulos"]
-forbidden_modules = ["emporio.adaptadores", "emporio.composicao"]
+forbidden_modules = ["emporio.adaptadores", "emporio.composicao", "emporio.configuracao"]
 
 [[tool.importlinter.contracts]]
 name = "C1d - adaptadores nao importam composicao"

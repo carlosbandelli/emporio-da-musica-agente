@@ -1,0 +1,33 @@
+# Configuração por tenant (arquitetura §4). Lida só pelo composition root (emporio.composicao).
+# Caminhos relativos são resolvidos a partir da raiz do repositório (e de /app no container).
+tenants:
+  emporio:
+    nome: Empório da Música
+    schema: emporio
+    idioma_padrao: pt-BR
+    idiomas_suportados: [pt-BR, en-US]
+    persona:
+      nome: Sônia
+      resumo: >-
+        Assistente virtual simpática e direta ao ponto: informal mas profissional, como uma amiga que entende de
+        música (manual §7.1). Resposta primeiro, 2 a 5 frases, sem linguagem robotizada.
+    contatos:
+      # Premissas #1 e #2: telefone (capa/§1.2) e WhatsApp (§7) coexistem; e-mail sem acento.
+      # Endereço e horário vêm do manual de políticas (tarefa 1.7).
+      telefone: "(67) 3341-4444"
+      whatsapp: "(67) 3321-4500"
+      email: contato@emporiodamusica.com.br
+    politicas_arquivo: config/tenants/emporio/politicas.md
+    dados_dir: data
+    deadline_mensagem_s: 30
+    # Arquitetura §5.1: capacidade e taxa de reposição são configuráveis por tenant.
+    # Valores iniciais conservadores (tier grátis dos provedores); ajuste conforme o uso real.
+    limites:
+      sessao: { capacidade: 10, reposicao_por_s: 0.2 } # rajada de 10, 1 msg a cada 5 s
+      usuario: { capacidade: 30, reposicao_por_s: 0.5 }
+      tenant: { capacidade: 120, reposicao_por_s: 2.0 }
+      provedor: { capacidade: 30, reposicao_por_s: 0.5 } # saída por provedor (free tier)
+      tamanho_max_mensagem: 2000 # caracteres; acima disso, mensagem fixa sem chamar LLM
+    termos_fora_de_escopo:
+      pt-BR: [cordas, palhetas, cabos, cases, capas, pedais, amplificadores, afinadores, suportes, acessórios]
+      en-US: [strings, picks, cables, cases, gig bags, pedals, amplifiers, tuners, stands, accessories]
