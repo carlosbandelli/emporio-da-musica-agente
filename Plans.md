@@ -1,6 +1,6 @@
 # Plans.md — Empório da Música (agente Sônia)
 
-Purpose: entregar até **2026-11-02** um agente de atendimento em Python que roda de ponta a ponta com
+Purpose: entregar até **2026-11-02 23:59** um agente de atendimento em Python que roda de ponta a ponta com
 `uv run emporio chat` a partir de um clone limpo (uma chave de LLM), com regras de negócio testadas, 3–5 exemplos e
 README bilíngue. Extras de escala só depois do núcleo testado.
 
@@ -82,7 +82,7 @@ Destino: `docs/arquitetura.md` e `docs/premissas.md`.
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
 | 3.1 | `[lane:release]` `[tdd:skip:release-prep]` `@claude` **Revisão final**: `/code-review high` na `main`, `security-review`, READMEs sincronizados com o que foi entregue (Fase 2 parcial vai para limitações), `.env`/`.mcp.json`/PDF do enunciado fora do histórico (`git log --all -- .env` vazio). | Achados críticos corrigidos ou documentados; varredura de segredos no histórico sem achados | 1.16 | cc:TODO |
-| 3.2 | `[lane:release]` `[tdd:skip:release-automation]` `@claude` **Publicar**: repositório e GitHub Project públicos antes do prazo de 2026-11-02 (horário a confirmar); depois disso, nada muda no repositório. | `gh repo view --json visibility` = PUBLIC; Project público; URL registrada | 3.1 | cc:TODO |
+| 3.2 | `[lane:release]` `[tdd:skip:release-automation]` `@claude` **Publicar**: repositório e GitHub Project públicos antes do prazo de 2026-11-02 23:59; depois disso, nada muda no repositório. | `gh repo view --json visibility` = PUBLIC; Project público; URL registrada | 3.1 | cc:TODO |
 
 ## Reject (fora do plano, com motivo)
 

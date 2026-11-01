@@ -27,7 +27,7 @@ Once code, a dependency manifest and run/test commands exist, add them to this f
   one LLM key) must be complete before scaling/infra extras.
 - Git: commit and push per step without asking; real incremental history, never squash or force-push.
 - Repo `carlosbandelli/emporio-da-musica-agente` stays **private until delivery**, then must be made public (the
-  GitHub Project board too). Delivery deadline: **2026-11-02** (time of day to confirm). Nothing changes in the repo after it.
+  GitHub Project board too). Delivery deadline: **2026-11-02 23:59** (America/Campo_Grande). Nothing changes in the repo after it.
 - CI may stay red until code exists; fix it at the end if needed (not a delivery blocker).
 - Secrets live in `.env` / `.mcp.json` (gitignored). Never print, copy or commit them. The Anthropic key expires
   around 2026-11-07: record Claude example conversations before that; without the key, the complex tier falls back
