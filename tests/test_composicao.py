@@ -153,3 +153,9 @@ async def test_diagnostico_do_motor_n8n_aponta_o_que_falta_sem_pedir_chave_de_ll
     info = await diag.diagnosticar(TenantContext("emporio"))
     assert any("N8N_WEBHOOK_URL" in a for a in info.avisos) and any("JWT_SECRET" in a for a in info.avisos)
     assert not any("GROQ_API_KEY" in a for a in info.avisos)
+
+
+def test_aplicacao_recebe_o_gateway_de_pagamento_pela_porta(tmp_path: Path) -> None:
+    """Hexagonal: a composição escolhe o adapter (hoje o fake, simulação) e a aplicação só conhece a porta."""
+    app = montar(settings(), provedores={"falso": LLMFalso([])}, raiz=RAIZ, dir_estado=tmp_path)
+    assert app.pagamento is not None and app.pagamento.nome == "fake"

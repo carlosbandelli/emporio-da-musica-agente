@@ -29,6 +29,7 @@ from emporio.adaptadores.motor.n8n import AgenteN8n
 from emporio.adaptadores.motor.nativo import AgenteNativo
 from emporio.adaptadores.motor.nativo.roteador import Roteador
 from emporio.adaptadores.observabilidade import criar_telemetria
+from emporio.adaptadores.pagamento import FakeGatewayPagamento
 from emporio.adaptadores.redis import criar_estado_redis
 from emporio.adaptadores.relogio import RelogioSistema
 from emporio.configuracao import ErroConfiguracao, Settings, carregar_tenants, obter_tenant
@@ -57,6 +58,7 @@ from emporio.portas import (
     TenantContext,
     aplicar_alteracao,
 )
+from emporio.portas.pagamento import GatewayPagamento
 from emporio.portas.tenant import ConfigTenant
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,9 @@ class Aplicacao:
     """Configuração editável dos tenants (em memória do processo)."""
     ferramentas: FachadaTools | None = None
     """Fachada de tools (a mesma do motor nativo) para `/v1/tools/*` e motores externos como o n8n."""
+    pagamento: GatewayPagamento | None = None
+    """Gateway de pagamento pela porta (`docs/pagamento.md`). Hoje o adapter é o `FakeGatewayPagamento` (simulação,
+    nenhuma cobrança real); um gateway real entra como outro adapter da mesma porta, aprovado pela suíte de contrato."""
 
 
 class ConfigTenantsMemoria:
@@ -312,6 +317,7 @@ def montar(
         solicitacoes=solicitacoes,
         config_tenants=config_tenants,
         ferramentas=ferramentas,
+        pagamento=FakeGatewayPagamento(relogio=relogio_app),
     )
 
 
