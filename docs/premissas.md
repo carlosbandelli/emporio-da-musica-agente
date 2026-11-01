@@ -22,3 +22,5 @@ Critério geral: **a regra mais específica vence** e, **na dúvida, o agente n�
 | 14 | Mensagem fora do expediente | O assistente virtual **responde normalmente** e informa quando a equipe humana volta a atender. |
 | 15 | Verificação de identidade para consultar pedidos (LGPD, §9) | Exigir **número do pedido + e-mail ou telefone** do cliente; sem correspondência, nenhum dado do pedido é exibido. |
 | 16 | Onde "registrar" reclamação (§7.3) | `registrar_solicitacao` grava em `reclamacoes.jsonl` (tipos: reclamação, cotação de frete, outros) e informa retorno em 24h úteis. |
+| 17 | Arredondamento das parcelas (ex.: R$ 1.000,00 em 3x) | Valores em centavos, `ROUND_HALF_UP`; a sobra da divisão vai para a **1ª parcela** (R$ 333,34 + R$ 333,33 + R$ 333,33). |
+| 18 | Pagamento combinado (acima de R$ 2.000) em que uma das partes falha | **Estornar as partes já aprovadas** e o cliente refaz o pagamento do zero. Mais simples e sem estado parcial pendente; o manual não trata o caso. |
