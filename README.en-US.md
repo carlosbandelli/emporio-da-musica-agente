@@ -661,6 +661,7 @@ and Prometheus (section 1, path 2), and the CI. Left out:
 
 ### 8.2 Known limitations
 
+- **Customers who type word by word** (assumption #177): each message becomes a full turn. Fragments such as "hi", "I want", "a guitar" get one reply each (more LLM calls and cost), may hit the session rate limit (burst of 10, then 1 every 5 s) and, through the API, two simultaneous fragments can lose a turn (#167). The history keeps the context, so the reply to the last fragment sees the whole sentence.
 - **Final-review findings accepted** (assumption #167): rate limiting only on the `sessao` and `tenant` layers (the `usuario` and `provedor` layers are configured but not applied); two concurrent messages on the same session can lose a turn; the Redis promotions cache can be up to 60 s stale; a circuit probe stays held for 30 s if the message deadline expires during it.
 - **Local mode.** Without `DATABASE_URL` and `REDIS_URL`, session, rate limit and circuit state are in memory, per process.
   History is lost when `chat` exits.
@@ -736,6 +737,7 @@ There are 41 issues in total (#1–#41) and about 70 incremental commits, betwee
 | [token-optimizer](https://github.com/alexgreensh/token-optimizer) | Claude Code plugin that tracks the session's context and token usage and saves checkpoints to resume work across sessions without losing state. |
 
 Python libraries in the project (rationale in section 4):
+- **Group fragmented messages (debounce):** a decorator of the  port () that merges fragments from the same session within a short window (e.g. 2.5 s, configurable per tenant), restarts the window on each new fragment, answers the earlier ones with code  without calling the LLM, and runs a single turn with the full text. A per-session lock prevents concurrent processing (fixes #167b). Buffer in memory in local mode and in Redis with several replicas; being a decorator, it works for all three engines and passes the same I1–I8 suite.
 - **Runtime:** `typer` (CLI), `fastapi` + `uvicorn` (API), `pydantic` + `pydantic-settings` (models and configuration), `groq`, `google-genai`, `anthropic` (LLM SDKs), `tenacity` (retry), `httpx` (HTTP), `sqlalchemy` + `psycopg` + `alembic` (Postgres and migrations), `redis`, `pyjwt` (RBAC), `prometheus-client`, `opentelemetry-sdk` + `opentelemetry-exporter-otlp-proto-http` (observability), `babel` (currency format), `holidays` (public holidays), `pyyaml`, `tzdata`.
 - **Development:** `pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `mypy`, `import-linter` (rules C1–C5), `fakeredis`, `testcontainers` (real Postgres/Redis in tests), `asgi-lifespan`, `types-pyyaml`.
 

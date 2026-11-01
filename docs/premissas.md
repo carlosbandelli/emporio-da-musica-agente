@@ -135,3 +135,4 @@ Critério geral: **a regra mais específica vence** e, **na dúvida, o agente n�
 | 174 | Tokens e ids | Cache lido de `prompt_tokens_details.cached_tokens` (ou `prompt_cache_hit_tokens` do DeepSeek); `entrada` exclui o cache (#170); tool call sem id recebe `call_<i>`. |
 | 175 | Diagnóstico | Mostra nome, modelo e endpoint sem credenciais nem query string; nunca a chave. |
 | 176 | Validação do provedor dinâmico | Testado só com HTTP simulado (sem chave da OpenAI disponível); a chamada real fica para quem configurar. |
+| 177 | Mensagens fragmentadas (palavra por palavra) | Cada mensagem é um turno completo, sem agrupamento: fragmentos geram uma resposta cada, contam no rate limit da sessão e, pela API, podem concorrer (#167b). Decisão do usuário: documentar; a solução (decorador `MotorComAgrupamento` com debounce de ~2,5 s e lock por sessão) fica como melhoria futura. |
