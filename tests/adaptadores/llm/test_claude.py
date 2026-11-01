@@ -15,6 +15,7 @@ from emporio.portas import (
     ErroLLMAutenticacao,
     ErroLLMPermanente,
     ErroLLMRecusa,
+    ErroLLMSemCredito,
     ErroLLMTransitorio,
     LLMProvider,
     MensagemLLM,
@@ -289,3 +290,31 @@ async def test_conexao_e_timeout_sao_transitorios(excecao: Exception) -> None:
 
     with pytest.raises(ErroLLMTransitorio):
         await provedor(Servidor(falha)).gerar(requisicao())
+
+
+# --- sem crédito ---------------------------------------------------------------
+
+
+async def test_saldo_insuficiente_400_vira_sem_credito() -> None:
+    msg = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade."
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(erro(400, msg))).gerar(requisicao())
+
+
+async def test_billing_error_no_corpo_vira_sem_credito() -> None:
+    corpo = {"type": "error", "error": {"type": "billing_error", "message": "billing problem"}}
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(httpx2.Response(400, json=corpo))).gerar(requisicao())
+
+
+async def test_402_vira_sem_credito() -> None:
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(erro(402, "payment required"))).gerar(requisicao())
+
+
+async def test_429_com_retry_after_longo_vira_sem_credito_e_curto_nao() -> None:
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(erro(429, "rate", headers={"retry-after": "3600"}))).gerar(requisicao())
+    with pytest.raises(ErroLLMTransitorio) as info:
+        await provedor(Servidor(erro(429, "rate", headers={"retry-after": "10"}))).gerar(requisicao())
+    assert not isinstance(info.value, ErroLLMSemCredito)

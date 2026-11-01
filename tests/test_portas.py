@@ -15,6 +15,7 @@ from emporio.portas import (
     ErroLLMAutenticacao,
     ErroLLMPermanente,
     ErroLLMRecusa,
+    ErroLLMSemCredito,
     ErroLLMTransitorio,
     ErroPrazoEsgotado,
     FiltroProdutos,
@@ -50,6 +51,7 @@ def test_erros_llm_extensoes_aditivas() -> None:
     assert issubclass(ErroPrazoEsgotado, ErroLLMTransitorio)
     assert issubclass(ErroLLMAutenticacao, ErroLLMPermanente)
     assert issubclass(ErroLLMRecusa, ErroLLMPermanente)
+    assert issubclass(ErroLLMSemCredito, ErroLLMAutenticacao)
     assert ErroCircuitoAberto("aberto").retry_after_s is None
 
 

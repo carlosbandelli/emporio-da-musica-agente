@@ -144,6 +144,15 @@ class ErroLLMAutenticacao(ErroLLMPermanente):
     """401/403, chave inválida ou expirada: abre o circuito do provedor na hora."""
 
 
+class ErroLLMSemCredito(ErroLLMAutenticacao):
+    """Créditos ou cota (diária) do provedor esgotados: 402, `billing_error`, cota diária, 429 com espera > 60 s.
+
+    Subclasse de `ErroLLMAutenticacao` de propósito: a conta não pode ser usada até alguém agir (recarregar ou
+    esperar o dia virar), então herda o mesmo tratamento (abre o circuito na hora, sem retry; o roteador pula o
+    provedor). O tipo próprio permite distinguir "sem crédito" de "chave inválida" em logs e métricas.
+    """
+
+
 class ErroLLMRecusa(ErroLLMPermanente):
     """O modelo recusou responder (política de segurança). Não abre o circuito."""
 

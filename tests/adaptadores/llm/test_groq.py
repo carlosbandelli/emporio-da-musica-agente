@@ -14,6 +14,7 @@ from emporio.portas import (
     DefinicaoTool,
     ErroLLMAutenticacao,
     ErroLLMPermanente,
+    ErroLLMSemCredito,
     ErroLLMTransitorio,
     LLMProvider,
     MensagemLLM,
@@ -185,3 +186,52 @@ async def test_conexao_e_timeout(excecao: Exception) -> None:
 
     with pytest.raises(ErroLLMTransitorio):
         await provedor(Servidor(falha)).gerar(requisicao())
+
+
+# --- sem crédito / cota diária ---------------------------------------------------
+
+
+def erro_groq(status: int, mensagem: str, codigo: str, headers: dict[str, str] | None = None) -> httpx.Response:
+    corpo = {"error": {"message": mensagem, "type": "tokens", "code": codigo}}
+    return httpx.Response(status, json=corpo, headers=headers)
+
+
+@pytest.mark.parametrize(
+    "mensagem",
+    [
+        "Rate limit reached for model `openai/gpt-oss-120b` in organization `org_x` service tier `on_demand` on"
+        " tokens per day (TPD): Limit 200000, Used 199500, Requested 900. Please try again in 4m19.2s.",
+        "Rate limit reached for model `openai/gpt-oss-120b` in organization `org_x` on requests per day (RPD):"
+        " Limit 1000, Used 1000, Requested 1. Please try again in 1m26.4s.",
+    ],
+)
+async def test_cota_diaria_vira_sem_credito(mensagem: str) -> None:
+    resp = erro_groq(429, mensagem, "rate_limit_exceeded", headers={"retry-after": "8"})
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(resp)).gerar(requisicao())
+
+
+@pytest.mark.parametrize("status", [400, 429])
+async def test_insufficient_quota_vira_sem_credito(status: int) -> None:
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(erro_groq(status, "quota", "insufficient_quota"))).gerar(requisicao())
+
+
+async def test_402_vira_sem_credito() -> None:
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(erro(402, "payment required"))).gerar(requisicao())
+
+
+async def test_limite_por_minuto_continua_transitorio() -> None:
+    mensagem = "Rate limit reached ... on tokens per minute (TPM): Limit 8000, Used 7900. Please try again in 2.1s."
+    resp = erro_groq(429, mensagem, "rate_limit_exceeded", headers={"retry-after": "3"})
+    with pytest.raises(ErroLLMTransitorio) as info:
+        await provedor(Servidor(resp)).gerar(requisicao())
+    assert not isinstance(info.value, ErroLLMSemCredito)
+    assert info.value.retry_after_s == 3.0
+
+
+async def test_429_com_retry_after_longo_vira_sem_credito() -> None:
+    resp = erro_groq(429, "rate limit", "rate_limit_exceeded", headers={"retry-after": "900"})
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(resp)).gerar(requisicao())

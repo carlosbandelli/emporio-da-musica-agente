@@ -7,7 +7,7 @@ import groq
 import httpx
 from groq.types.chat import ChatCompletion
 
-from emporio.adaptadores.llm._erros import erro_por_status, retry_after_dos_headers
+from emporio.adaptadores.llm._erros import cota_diaria_esgotada, erro_por_status, retry_after_dos_headers
 from emporio.portas.llm import (
     ChamadaTool,
     ErroLLM,
@@ -25,6 +25,7 @@ EsforcoGroq = Literal["low", "medium", "high"]
 MODELO_PADRAO = "openai/gpt-oss-120b"
 MAX_TOKENS_MINIMO = 4096
 _LIMITE_DETALHE = 300
+_STATUS_COTA = frozenset({400, 429})
 
 
 def cliente_groq(api_key: str, *, http_client: httpx.AsyncClient | None = None) -> groq.AsyncGroq:
@@ -144,7 +145,10 @@ def _converter(erro: groq.GroqError) -> ErroLLM:
     """Exceção do SDK → erro da porta (da mais específica para a mais genérica)."""
     if isinstance(erro, groq.APIStatusError):
         detalhe = erro.message[:_LIMITE_DETALHE]
-        return erro_por_status("groq", erro.status_code, detalhe, retry_after_dos_headers(erro.response.headers))
+        # Cota diária (TPD/RPD, "per day") ou `insufficient_quota`: não volta em segundos, abre o circuito.
+        sem_credito = erro.status_code in _STATUS_COTA and cota_diaria_esgotada(f"{erro.message} {erro.body}")
+        retry_after = retry_after_dos_headers(erro.response.headers)
+        return erro_por_status("groq", erro.status_code, detalhe, retry_after, sem_credito=sem_credito)
     if isinstance(erro, groq.APITimeoutError):
         return ErroLLMTransitorio("groq: timeout")
     if isinstance(erro, groq.APIConnectionError):

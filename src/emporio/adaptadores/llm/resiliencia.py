@@ -48,9 +48,9 @@ class ProvedorResiliente:
     Por tentativa: confere o deadline, consulta o circuito (aberto → `ErroCircuitoAberto` sem chamar a API), entra
     no bulkhead (`asyncio.Semaphore` desta instância) e chama o provedor com timeout `min(req.timeout_s, restante)`.
     Resultado no circuito: sucesso → `registrar_sucesso`; transitório/timeout → falha transitória; autenticação →
-    falha permanente (abre na hora); erro de requisição (400, recusa) → `registrar_sucesso`, porque o provedor
-    respondeu e está saudável (o problema é o pedido). Timeout causado pelo deadline vira `ErroPrazoEsgotado` e não
-    conta contra o provedor.
+    falha permanente (abre na hora; inclui `ErroLLMSemCredito`, subclasse); erro de requisição (400, recusa) →
+    `registrar_sucesso`, porque o provedor respondeu e está saudável (o problema é o pedido). Timeout causado pelo
+    deadline vira `ErroPrazoEsgotado` e não conta contra o provedor.
 
     Retry (`tenacity`): só transitórios, até `tentativas`; espera = `Retry-After` quando vier, senão
     `wait_random_exponential`. Desiste na hora se `Retry-After` > `retry_after_max_s` ou se, depois da espera, o

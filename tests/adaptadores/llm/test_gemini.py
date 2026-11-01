@@ -16,6 +16,7 @@ from emporio.portas import (
     ErroLLMAutenticacao,
     ErroLLMPermanente,
     ErroLLMRecusa,
+    ErroLLMSemCredito,
     ErroLLMTransitorio,
     LLMProvider,
     MensagemLLM,
@@ -251,3 +252,58 @@ async def test_conexao_e_timeout(excecao: Exception) -> None:
 
     with pytest.raises(ErroLLMTransitorio):
         await provedor(Servidor(falha)).gerar(requisicao())
+
+
+# --- sem crédito / cota diária ---------------------------------------------------
+
+
+def violacao(quota_id: str, valor: str = "250") -> dict[str, Any]:
+    return {
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        "violations": [
+            {
+                "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                "quotaId": quota_id,
+                "quotaDimensions": {"location": "global", "model": "gemini-flash"},
+                "quotaValue": valor,
+            }
+        ],
+    }
+
+
+def atraso(segundos: str) -> dict[str, Any]:
+    return {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": segundos}
+
+
+MSG_COTA = "You exceeded your current quota, please check your plan and billing details."
+
+
+async def test_cota_diaria_vira_sem_credito() -> None:
+    detalhes = [violacao("GenerateRequestsPerDayPerProjectPerModel-FreeTier"), atraso("23s")]
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(erro(429, "RESOURCE_EXHAUSTED", MSG_COTA, detalhes))).gerar(requisicao())
+
+
+async def test_cota_zero_vira_sem_credito() -> None:
+    detalhes = [violacao("GenerateRequestsPerMinutePerProjectPerModel-FreeTier", valor="0"), atraso("5s")]
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(erro(429, "RESOURCE_EXHAUSTED", MSG_COTA, detalhes))).gerar(requisicao())
+
+
+async def test_cota_por_minuto_continua_transitoria() -> None:
+    detalhes = [violacao("GenerateRequestsPerMinutePerProjectPerModel-FreeTier", valor="10"), atraso("4s")]
+    with pytest.raises(ErroLLMTransitorio) as info:
+        await provedor(Servidor(erro(429, "RESOURCE_EXHAUSTED", MSG_COTA, detalhes))).gerar(requisicao())
+    assert not isinstance(info.value, ErroLLMSemCredito)
+    assert info.value.retry_after_s == 4.0
+
+
+async def test_retry_delay_longo_vira_sem_credito() -> None:
+    detalhes = [atraso("3600s")]
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(erro(429, "RESOURCE_EXHAUSTED", "quota", detalhes))).gerar(requisicao())
+
+
+async def test_402_vira_sem_credito() -> None:
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor(Servidor(erro(402, "FAILED_PRECONDITION", "billing"))).gerar(requisicao())

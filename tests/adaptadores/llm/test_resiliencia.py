@@ -11,6 +11,7 @@ from emporio.portas import (
     ErroLLMAutenticacao,
     ErroLLMPermanente,
     ErroLLMRecusa,
+    ErroLLMSemCredito,
     ErroLLMTransitorio,
     ErroPrazoEsgotado,
     EstadoCircuito,
@@ -56,10 +57,10 @@ async def test_401_abre_circuito_na_hora_e_proxima_chamada_nao_toca_a_api(tempo:
     with pytest.raises(ErroCircuitoAberto):
         await provedor.gerar(requisicao())
     assert len(falso.requisicoes) == 1  # pulou o provedor sem chamar
-    tempo.t += 599
+    tempo.t += 200  # abaixo do menor tempo de abertura permanente (com ou sem jitter no store)
     with pytest.raises(ErroCircuitoAberto):
         await provedor.gerar(requisicao())
-    tempo.t += 1  # 10 min depois: meio-aberto, a sonda passa e o sucesso fecha
+    tempo.t += 400  # 10 min depois: meio-aberto, a sonda passa e o sucesso fecha
     assert (await provedor.gerar(requisicao())).texto == "nunca"
     assert await circuito.estado("claude") is EstadoCircuito.FECHADO
 
@@ -233,3 +234,21 @@ async def test_bulkhead_limita_concorrencia_por_instancia(tempo: Tempo, sono: So
     assert all(r.texto == "ok" for r in resultados)
     assert pico == 3
     assert len(falso.requisicoes) == 6
+
+
+async def test_sem_credito_abre_circuito_na_hora_sem_retry(tempo: Tempo, sono: SonoFalso) -> None:
+    falso = LLMFalso([ErroLLMSemCredito("402 sem crédito"), responder_texto("voltou")], nome="claude")
+    provedor, circuito = montar(falso, tempo, sono)
+    with pytest.raises(ErroLLMSemCredito):
+        await provedor.gerar(requisicao())
+    assert len(falso.requisicoes) == 1
+    assert sono.esperas == []
+    assert await circuito.estado("claude") is EstadoCircuito.ABERTO
+    with pytest.raises(ErroCircuitoAberto):
+        await provedor.gerar(requisicao())
+    assert len(falso.requisicoes) == 1  # pulou sem tocar a API
+    tempo.t += 200
+    with pytest.raises(ErroCircuitoAberto):
+        await provedor.gerar(requisicao())
+    tempo.t += 400  # abertura permanente: 10 min; depois 1 sonda
+    assert (await provedor.gerar(requisicao())).texto == "voltou"

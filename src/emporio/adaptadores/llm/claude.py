@@ -35,6 +35,7 @@ BETA_FALLBACK_SERVIDOR = "server-side-fallback-2026-07-01"
 MAX_TOKENS_MINIMO = 16000
 _TIPOS_THINKING = frozenset({"thinking", "redacted_thinking"})
 _LIMITE_DETALHE = 300
+_MARCA_SEM_SALDO = "credit balance"
 
 
 def cliente_claude(api_key: str, *, http_client: httpx2.AsyncClient | None = None) -> anthropic.AsyncAnthropic:
@@ -199,7 +200,11 @@ def _converter(erro: anthropic.AnthropicError) -> ErroLLM:
     """Exceção do SDK → erro da porta (da mais específica para a mais genérica)."""
     if isinstance(erro, anthropic.APIStatusError):
         detalhe = erro.message[:_LIMITE_DETALHE]
-        return erro_por_status("claude", erro.status_code, detalhe, retry_after_dos_headers(erro.response.headers))
+        # Saldo esgotado chega como 400 "Your credit balance is too low..." ou com `error.type == "billing_error"`
+        # (`ErrorType` do SDK 2.3); ambos abrem o circuito.
+        sem_credito = erro.type == "billing_error" or _MARCA_SEM_SALDO in erro.message.lower()
+        retry_after = retry_after_dos_headers(erro.response.headers)
+        return erro_por_status("claude", erro.status_code, detalhe, retry_after, sem_credito=sem_credito)
     if isinstance(erro, anthropic.APITimeoutError):
         return ErroLLMTransitorio("claude: timeout")
     if isinstance(erro, anthropic.APIConnectionError):

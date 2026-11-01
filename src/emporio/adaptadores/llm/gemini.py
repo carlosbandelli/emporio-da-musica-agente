@@ -15,7 +15,7 @@ import httpx2
 from google import genai
 from google.genai import errors, types
 
-from emporio.adaptadores.llm._erros import erro_por_status, retry_after_dos_headers
+from emporio.adaptadores.llm._erros import cota_diaria_esgotada, erro_por_status, retry_after_dos_headers
 from emporio.portas.llm import (
     ChamadaTool,
     ConteudoBruto,
@@ -35,6 +35,7 @@ MODELO_PADRAO = "gemini-flash-latest"
 MAX_TOKENS_MINIMO = 8192
 _LIMITE_DETALHE = 300
 _HTTP_BAD_REQUEST = 400
+_HTTP_LIMITE = 429
 
 _RECUSAS = frozenset(
     {
@@ -216,7 +217,33 @@ def _converter(erro: errors.APIError) -> ErroLLM:
     retry_after = _retry_info(erro.details)
     if retry_after is None and isinstance(headers, Mapping):
         retry_after = retry_after_dos_headers(headers)
-    return erro_por_status("gemini", status, detalhe, retry_after)
+    sem_credito = status == _HTTP_LIMITE and _cota_esgotada(erro.details)
+    return erro_por_status("gemini", status, detalhe, retry_after, sem_credito=sem_credito)
+
+
+def _violacoes_de_cota(detalhes: Any) -> list[Mapping[str, Any]]:
+    """Violações de `google.rpc.QuotaFailure` no corpo do erro."""
+    if not isinstance(detalhes, Mapping):
+        return []
+    corpo = detalhes.get("error", detalhes)
+    itens = corpo.get("details") if isinstance(corpo, Mapping) else None
+    violacoes: list[Mapping[str, Any]] = []
+    for item in itens if isinstance(itens, list) else ():
+        if isinstance(item, Mapping) and str(item.get("@type", "")).endswith("google.rpc.QuotaFailure"):
+            lista = item.get("violations")
+            violacoes.extend(v for v in (lista if isinstance(lista, list) else ()) if isinstance(v, Mapping))
+    return violacoes
+
+
+def _cota_esgotada(detalhes: Any) -> bool:
+    """Cota diária (`quotaId` com `PerDay`) ou cota zero (`quotaValue == "0"`, plano sem acesso ao modelo).
+
+    A mensagem "You exceeded your current quota" sozinha não basta: ela também aparece na cota por minuto.
+    """
+    return any(
+        cota_diaria_esgotada(str(v.get("quotaId", ""))) or str(v.get("quotaValue", "")) == "0"
+        for v in _violacoes_de_cota(detalhes)
+    )
 
 
 def _retry_info(detalhes: Any) -> float | None:
