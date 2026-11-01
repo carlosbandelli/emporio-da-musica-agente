@@ -364,6 +364,8 @@ def _imprimir_diagnostico(info: DiagnosticoInfo) -> None:
         else:
             typer.echo("- Dados: não carregados")
         typer.echo(f"- Manual de políticas: {'encontrado' if info.manual_encontrado else 'não encontrado'}")
+        if info.llm_compativel:
+            typer.echo(f"- Provedor compatível com OpenAI: {info.llm_compativel}")
     else:
         typer.echo(f"- Tenant: {info.tenant_id}")
         typer.echo(f"- Dados carregados: {'sim' if info.dados_carregados else 'não'}")

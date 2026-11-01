@@ -147,3 +147,17 @@ def test_versao_e_ajuda() -> None:
         app, ["chat", "--help"]
     )
     assert r.exit_code == 0 and "--gravar" in r.output and "--idioma" in r.output and "--tenant" in r.output
+
+
+def test_diagnostico_mostra_provedor_compativel_sem_a_chave(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVEDOR", "deepseek")
+    monkeypatch.setenv("LLM_MODELO", "deepseek-chat")
+    monkeypatch.setenv("LLM_API_KEY", "sk-segredo-789")
+    app = criar_app(montar_diag=lambda: montar_diagnostico(carregar_settings(_env_file=None), raiz=RAIZ))
+    r = CliRunner().invoke(app, ["diagnostico"])
+    assert r.exit_code == 0, r.output
+    assert "Provedores com chave: deepseek" in r.output
+    assert (
+        "Provedor compatível com OpenAI: deepseek (modelo deepseek-chat, endpoint https://api.deepseek.com)" in r.output
+    )
+    assert "sk-segredo" not in r.output and "789" not in r.output

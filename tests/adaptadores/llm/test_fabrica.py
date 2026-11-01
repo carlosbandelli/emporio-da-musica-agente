@@ -3,14 +3,17 @@
 import pytest
 
 from emporio.adaptadores.llm import (
+    POLITICA_COMPATIVEL_OPENAI,
     POLITICAS_PADRAO,
     ProvedorClaude,
+    ProvedorCompativelOpenAI,
     ProvedorGemini,
     ProvedorGroq,
     ProvedorResiliente,
     criar_provedores,
 )
 from emporio.adaptadores.memoria import CircuitoStoreMemoria
+from emporio.adaptadores.motor.nativo.roteador import Nivel, Roteador
 from emporio.configuracao import Settings
 
 from .conftest import SonoFalso, Tempo
@@ -73,3 +76,63 @@ def test_todos_os_provedores(tempo: Tempo, sono: SonoFalso) -> None:
 
 def test_politicas_padrao() -> None:
     assert {n: p.max_concorrentes for n, p in POLITICAS_PADRAO.items()} == {"claude": 5, "gemini": 10, "groq": 10}
+
+
+# --- provedor compatível com OpenAI (LLM_*) ----------------------------------------
+
+
+def test_compativel_so_e_registrado_quando_configurado() -> None:
+    assert criar_provedores(Settings(_env_file=None, llm_modelo="gpt-4o-mini"), CircuitoStoreMemoria()) == {}
+    s = Settings(_env_file=None, llm_provedor="deepseek", llm_modelo="deepseek-chat", llm_api_key="sk-x")  # type: ignore[arg-type]
+    provedores = criar_provedores(s, CircuitoStoreMemoria())
+    assert set(provedores) == {"deepseek"}
+    resiliente = provedores["deepseek"]
+    assert isinstance(resiliente, ProvedorResiliente)
+    assert resiliente.nome == "deepseek"
+    assert resiliente.politica is POLITICA_COMPATIVEL_OPENAI and resiliente.politica.max_concorrentes == 10
+    interno = resiliente.interno
+    assert isinstance(interno, ProvedorCompativelOpenAI)
+    assert (interno.modelo, interno.campo_max_tokens) == ("deepseek-chat", "max_tokens")
+    assert str(interno._cliente.base_url).startswith("https://api.deepseek.com")
+
+
+def test_compativel_openai_usa_endpoint_padrao_e_max_completion_tokens() -> None:
+    s = Settings(_env_file=None, llm_modelo="gpt-4o-mini", llm_api_key="sk-x")  # type: ignore[arg-type]
+    interno = criar_provedores(s, CircuitoStoreMemoria())["openai"]
+    assert isinstance(interno, ProvedorResiliente) and isinstance(interno.interno, ProvedorCompativelOpenAI)
+    assert interno.interno.campo_max_tokens == "max_completion_tokens"
+    assert str(interno.interno._cliente.base_url).startswith("https://api.openai.com/v1")
+
+
+def test_so_o_compativel_atende_todos_os_niveis_sem_classificar() -> None:
+    s = Settings(_env_file=None, llm_provedor="ollama", llm_modelo="qwen3", llm_api_key="ollama")  # type: ignore[arg-type]
+    roteador = Roteador(criar_provedores(s, CircuitoStoreMemoria()))
+    assert not roteador.precisa_classificar
+    assert {roteador.cadeia(n) for n in Nivel} == {("ollama",)}
+    assert roteador.cadeia(None) == ("ollama",)
+
+
+def test_com_gemini_o_compativel_fica_no_fim_da_cadeia() -> None:
+    s = Settings(
+        _env_file=None,
+        google_api_key="g",  # type: ignore[arg-type]
+        groq_api_key="q",  # type: ignore[arg-type]
+        llm_provedor="openrouter",
+        llm_modelo="openai/gpt-4o-mini",
+        llm_api_key="sk-or",  # type: ignore[arg-type]
+    )
+    provedores = criar_provedores(s, CircuitoStoreMemoria())
+    assert list(provedores) == ["gemini", "groq", "openrouter"]
+    roteador = Roteador(provedores)
+    assert roteador.precisa_classificar
+    for nivel in Nivel:
+        assert roteador.cadeia(nivel)[-1] == "openrouter"
+    assert roteador.cadeia(Nivel.SIMPLES) == ("groq", "gemini", "openrouter")
+    so_gemini = Roteador(
+        criar_provedores(
+            Settings(_env_file=None, google_api_key="g", llm_modelo="m", llm_api_key="k"),  # type: ignore[arg-type]
+            CircuitoStoreMemoria(),
+        )
+    )
+    assert {so_gemini.cadeia(n) for n in Nivel} == {("gemini", "openai")}
+    assert not so_gemini.precisa_classificar  # mesma cadeia em todos os níveis

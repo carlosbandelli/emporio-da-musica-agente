@@ -1,7 +1,8 @@
-"""Adaptadores de LLM (groq, gemini, claude e falso para testes) e a camada de resiliência."""
+"""Adaptadores de LLM (groq, gemini, claude, compatível com OpenAI e falso para testes) e a resiliência."""
 
 from emporio.adaptadores.llm.claude import ProvedorClaude, cliente_claude
-from emporio.adaptadores.llm.fabrica import POLITICAS_PADRAO, criar_provedores
+from emporio.adaptadores.llm.compativel_openai import ProvedorCompativelOpenAI, cliente_compativel_openai
+from emporio.adaptadores.llm.fabrica import POLITICA_COMPATIVEL_OPENAI, POLITICAS_PADRAO, criar_provedores
 from emporio.adaptadores.llm.falso import (
     ItemRoteiro,
     LLMFalso,
@@ -16,10 +17,12 @@ from emporio.adaptadores.llm.resiliencia import PoliticaResiliencia, ProvedorRes
 
 __all__ = [
     "POLITICAS_PADRAO",
+    "POLITICA_COMPATIVEL_OPENAI",
     "ItemRoteiro",
     "LLMFalso",
     "PoliticaResiliencia",
     "ProvedorClaude",
+    "ProvedorCompativelOpenAI",
     "ProvedorGemini",
     "ProvedorGroq",
     "ProvedorResiliente",
@@ -27,6 +30,7 @@ __all__ = [
     "chamar_tool",
     "chamar_tools",
     "cliente_claude",
+    "cliente_compativel_openai",
     "cliente_gemini",
     "cliente_groq",
     "criar_provedores",

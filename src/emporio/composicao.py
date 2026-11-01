@@ -68,7 +68,10 @@ MOTORES_DISPONIVEIS: Final = ("nativo", "n8n")
 MOTORES_FASE_2: Final[tuple[str, ...]] = ()
 """Valores previstos, ainda não implementados (o `n8n` entrou na task 2.7)."""
 
-_VARIAVEIS_CHAVE: Final = "GROQ_API_KEY, GOOGLE_API_KEY ou ANTHROPIC_API_KEY"
+_VARIAVEIS_CHAVE: Final = (
+    "GROQ_API_KEY, GOOGLE_API_KEY ou ANTHROPIC_API_KEY (ou LLM_API_KEY com LLM_MODELO para um provedor "
+    "compatível com a API da OpenAI)"
+)
 
 __all__ = [
     "MOTORES_DISPONIVEIS",
@@ -189,10 +192,13 @@ def _explicar_settings(exc: ValidationError) -> str:
     problemas: list[str] = []
     for erro in exc.errors():
         campo = ".".join(str(p) for p in erro["loc"])
+        mensagem = erro["msg"].removeprefix("Value error, ")
         if campo == "motor_atendimento":
             problemas.append(_mensagem_motor(str(erro.get("input"))))
-        else:
-            problemas.append(f"{campo.upper()}: {erro['msg']}")
+        elif campo:
+            problemas.append(f"{campo.upper()}: {mensagem}")
+        else:  # validação entre campos (ex.: LLM_API_KEY sem LLM_MODELO): a mensagem já cita as variáveis
+            problemas.append(mensagem)
     return "Configuração inválida: " + "; ".join(problemas)
 
 
@@ -415,6 +421,8 @@ class DiagnosticoDetalhado(DiagnosticoInfo):
     n_produtos: int | None = None
     n_pedidos: int | None = None
     manual_encontrado: bool = False
+    llm_compativel: str | None = None
+    """Provedor compatível com OpenAI em uso, como `nome (modelo ..., endpoint ...)`. Nunca inclui a chave."""
 
 
 class DiagnosticoLocal:
@@ -481,6 +489,7 @@ class DiagnosticoLocal:
             n_produtos=n_produtos,
             n_pedidos=n_pedidos,
             manual_encontrado=manual,
+            llm_compativel=_descrever_compativel(s),
         )
 
     def _manual_existe(self, arquivo: str, avisos: list[str]) -> bool:
@@ -498,6 +507,21 @@ class DiagnosticoLocal:
         except Exception as exc:
             avisos.append(f"Não foi possível carregar os dados em '{dados_dir}': {exc}")
             return None, None
+
+
+def _descrever_compativel(s: Settings) -> str | None:
+    config = s.llm_compativel()
+    if config is None:
+        return None
+    endpoint = "padrão do SDK da OpenAI" if config.base_url is None else _sem_credenciais(config.base_url)
+    return f"{config.nome} (modelo {config.modelo}, endpoint {endpoint})"
+
+
+def _sem_credenciais(url: str) -> str:
+    """Esquema, host e caminho da URL: tira usuário/senha e query string (podem levar segredo)."""
+    u = httpx.URL(url)
+    porta = f":{u.port}" if u.port else ""
+    return f"{u.scheme}://{u.host}{porta}{u.path}".rstrip("/")
 
 
 def montar_diagnostico(

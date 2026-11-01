@@ -43,7 +43,7 @@ flowchart TB
     end
 
     subgraph SAIDA ["adaptadores de saída (trocáveis)"]
-        LLM["llm<br/>ProvedorGroq · ProvedorGemini · ProvedorClaude<br/>ProvedorResiliente · LLMFalso"]
+        LLM["llm<br/>ProvedorGroq · ProvedorGemini · ProvedorClaude<br/>ProvedorCompativelOpenAI · ProvedorResiliente · LLMFalso"]
         CSV["csv (modo local)<br/>CatalogoCsv · ClientesCsv · PedidosCsv · SolicitacoesJsonl"]
         DB["db (Postgres, schema por tenant)<br/>CatalogoPostgres · PedidosPostgres · ClientesPostgres · SolicitacoesPostgres · migrar"]
         REDIS["redis<br/>SessaoStoreRedis · RateLimiterRedis · CatalogoComCache"]
@@ -154,7 +154,7 @@ cp .env.example .env
 
 Abra o `.env` e preencha **uma** chave. A recomendada é `GOOGLE_API_KEY` (Gemini, plano grátis), obtida em
 <https://aistudio.google.com/api-keys>. As outras (`GROQ_API_KEY`, `ANTHROPIC_API_KEY`) são opcionais. Chaves vazias
-são ignoradas.
+são ignoradas. Também dá para usar OpenAI, DeepSeek, OpenRouter, Ollama e outros (ver "Usar outro provedor" abaixo).
 
 **4. Confira a configuração e converse.**
 
@@ -174,6 +174,28 @@ uv run emporio chat
 - Conversar em inglês: `uv run emporio chat --idioma en-US`.
 - Gravar a conversa em Markdown: `uv run emporio chat --gravar minha-conversa.md`.
 - Conversar com a API em vez do motor local: `uv run emporio chat --api http://localhost:8000` (ver "Notas").
+
+### Usar outro provedor (OpenAI, DeepSeek, OpenRouter, Ollama...)
+
+Qualquer API compatível com a Chat Completions da OpenAI (com tool calling) entra só pelo `.env`, sem mudar código.
+Basta nome, modelo e chave:
+
+```dotenv
+LLM_PROVEDOR=deepseek        # nome livre: aparece nos logs, nas métricas e no diagnóstico
+LLM_MODELO=deepseek-chat     # obrigatório quando há chave
+LLM_API_KEY=sk-...           # Ollama local não exige chave: use qualquer valor (ex.: ollama)
+# LLM_BASE_URL=              # opcional; vazio = URL pronta do nome
+```
+
+- Nomes com URL pronta: `openai` (padrão), `deepseek`, `openrouter`, `mistral`, `together` e `ollama`
+  (`http://localhost:11434/v1`; no Docker, use `LLM_BASE_URL=http://host.docker.internal:11434/v1`). Qualquer outro
+  nome (vLLM, LM Studio, Gemini pelo endpoint OpenAI...) exige `LLM_BASE_URL`. O nome não pode ser `claude`, `gemini`
+  nem `groq`, que já são nativos (use, por exemplo, `gemini-openai`).
+- **Na cadeia:** com outras chaves, ele entra no fim de todas as cadeias de fallback (seção 4.3). Sozinho, atende todos
+  os níveis e o classificador não é chamado.
+- `uv run emporio diagnostico` mostra o nome, o modelo e o endpoint, nunca a chave. Configuração inválida (chave sem
+  modelo, nome desconhecido sem URL) encerra com mensagem clara.
+- O `.env.example` traz exemplos comentados para OpenAI, DeepSeek, OpenRouter e Ollama.
 
 ### Sem nenhuma chave
 
@@ -293,10 +315,11 @@ Diagramas em Mermaid, em [docs/diagramas/](docs/diagramas/README.md) (visão ger
 
 - **Python 3.12** (`.python-version`) e **uv** com `uv.lock`. O enunciado só exige Python. O uv instala o interpretador e
   resolve as dependências do mesmo jeito em Windows, macOS e Linux.
-- O projeto declara 23 dependências de runtime. A Fase 1 usava 11: os SDKs de Groq, Gemini e Anthropic, `tenacity`
+- O projeto declara 25 dependências de runtime. A Fase 1 usava 11: os SDKs de Groq, Gemini e Anthropic, `tenacity`
   (retry), `pydantic` e `pydantic-settings`, `typer` (CLI), `babel` e `holidays` (datas e feriados), `pyyaml` e `tzdata`.
   A Fase 2 acrescentou FastAPI e uvicorn (API), SQLAlchemy, psycopg e Alembic (Postgres), `redis`, PyJWT, `httpx`
-  (cliente da CLI remota), `prometheus-client` e OpenTelemetry (opcional).
+  (cliente da CLI remota), `prometheus-client` e OpenTelemetry (opcional). Depois vieram o SDK `openai` e o `httpx2`
+  (cliente HTTP dele), para o provedor compatível com a API da OpenAI.
 - Sentry não é dependência nem é usado (premissa #106); `SENTRY_DSN` em `Settings` fica reservado para a melhoria futura.
 
 ### 4.2 Framework do agente: loop próprio, sem LangChain ou LangGraph
@@ -315,7 +338,7 @@ Escrevi o loop agentic (roteia, chama o LLM, executa tools, repete) em vez de us
 - **Fase 2.** O motor `n8n` executa o workflow no n8n, mas a decisão continua no Python: validação, histórico, guarda e
   mensagens fixas ficam no código (premissa #160). O n8n só orquestra as chamadas de tool.
 
-### 4.3 LLM: três provedores, roteados por complexidade
+### 4.3 LLM: três provedores nativos (mais um compatível com OpenAI), roteados por complexidade
 
 | Nível | Exemplos | Provedor e modelo padrão | Motivo |
 |---|---|---|---|
@@ -335,13 +358,19 @@ Escrevi o loop agentic (roteia, chama o LLM, executa tools, repete) em vez de us
   | média | Gemini → Claude → Groq |
   | simples | Groq → Gemini → Claude |
 
+  O provedor compatível com OpenAI (`LLM_PROVEDOR`, seção 1) entra no fim das três cadeias e por último na fila do
+  classificador. É um adaptador genérico (`adaptadores/llm/compativel_openai.py`, SDK oficial `openai`) que só troca
+  URL base, modelo e chave: Chat Completions com tools, a mesma conversão de mensagens e de tool calls do Groq, uso de
+  tokens sem o cache e a mesma classificação de erros (401/403 autenticação; 402 e `insufficient_quota` sem crédito;
+  429 com `Retry-After`, 5xx, timeout e conexão transitórios; 400/404/422 permanentes).
+
 - **Resiliência por provedor** (arquitetura §5.2):
   - Até 3 tentativas, só para erros transitórios (timeout, conexão, 429, 5xx), com backoff exponencial e full jitter.
     Os retries internos dos SDKs ficam desligados.
   - Circuit breaker: abre após 5 falhas transitórias seguidas ou 50% de falhas em 30 s (mínimo de 10 chamadas).
     Autenticação inválida (401/403) e crédito ou cota esgotados abrem na hora (premissa #53). Depois, uma única sonda
     testa a volta do provedor.
-  - Bulkhead: no máximo 5 chamadas simultâneas ao Claude e 10 ao Gemini e ao Groq.
+  - Bulkhead: no máximo 5 chamadas simultâneas ao Claude e 10 ao Gemini, ao Groq e ao provedor compatível com OpenAI.
 - **Modelos e erros conhecidos.**
   - `gemini-flash-latest` respondeu com 504 em chamada real. Por isso o padrão é `gemini-2.5-flash` (premissa #43).
   - O plano grátis do Groq tem 8 mil tokens por minuto. Cada turno com tool gasta cerca de 6 mil tokens de entrada,
@@ -580,6 +609,9 @@ Prometheus (seção 1, caminho 2), e o CI. Ficaram de fora:
 - **Idioma por palavras** (premissa #57). Frases curtas e ambíguas caem no idioma do canal.
 - **Claude não validado com chamada real** (premissa #66, seção 4.3). Groq e Gemini foram validados com uma chamada mínima
   cada.
+- **Provedor compatível com OpenAI não validado com chamada real.** O adaptador genérico (`LLM_*`) foi testado só com
+  respostas HTTP falsas. As URLs prontas seguem a documentação de cada provedor; diferenças de um servidor (parâmetros
+  não aceitos, tool calling fraco em modelos locais pequenos) só aparecem no uso real.
 - **Limites dos planos grátis** (premissa #67). Só com a chave Groq, turnos com tool podem sair degradados (confirmado no clone limpo: `docs/verificacao-clone-limpo.md`).
 - **Frete fora de Campo Grande** não tem valor: não há CEP, peso nem dimensões nos dados. Vira cotação registrada
   (premissa #11).

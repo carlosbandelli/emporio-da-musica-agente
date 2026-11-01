@@ -129,3 +129,9 @@ Critério geral: **a regra mais específica vence** e, **na dúvida, o agente n�
 | 168 | Papel de serviço do n8n | O token por turno do `AgenteN8n` usa o papel `servico_tools`, com só `tools:usar` (substitui o `atendente` da #161, que lia solicitações com dados pessoais). |
 | 169 | Leitura degradada da sessão no Redis | Se a leitura de uma sessão falhou (Redis fora ou em pausa), o `salvar` seguinte dela é ignorado (com log) para nunca sobrescrever o histórico real com um turno só; a marca é por instância, limitada (1024, 30 min). |
 | 170 | Tokens no uso de LLM | `UsoTokens.entrada` exclui os tokens lidos do cache em todos os provedores (Gemini e Groq normalizados como o Claude), então o custo estimado não conta o cache duas vezes. |
+| 171 | Provedor de LLM dinâmico | Um adapter genérico compatível com a API da OpenAI, configurado só por `LLM_PROVEDOR`/`LLM_MODELO`/`LLM_API_KEY`/`LLM_BASE_URL`; um por processo; entra no fim das cadeias de fallback (sozinho, atende todos os níveis). Atende OpenAI, DeepSeek, OpenRouter, Mistral, Together, Ollama e qualquer servidor compatível. |
+| 172 | Presets e nomes | Presets de URL para openai, deepseek, openrouter, mistral, together e ollama; outro nome exige `LLM_BASE_URL`; `claude`, `gemini` e `groq` são reservados (erro claro). |
+| 173 | Parâmetros enviados | `max_completion_tokens` quando o nome é `openai` (modelos que raciocinam recusam `max_tokens`), `max_tokens` nos demais; piso 4096; sem `reasoning_effort` nem `temperature`. Bulkhead 10. |
+| 174 | Tokens e ids | Cache lido de `prompt_tokens_details.cached_tokens` (ou `prompt_cache_hit_tokens` do DeepSeek); `entrada` exclui o cache (#170); tool call sem id recebe `call_<i>`. |
+| 175 | Diagnóstico | Mostra nome, modelo e endpoint sem credenciais nem query string; nunca a chave. |
+| 176 | Validação do provedor dinâmico | Testado só com HTTP simulado (sem chave da OpenAI disponível); a chamada real fica para quem configurar. |

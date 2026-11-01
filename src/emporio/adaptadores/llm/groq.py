@@ -1,6 +1,5 @@
 """Adapter Groq (chat completions no formato OpenAI)."""
 
-import json
 from typing import Any, Literal, cast
 
 import groq
@@ -8,16 +7,13 @@ import httpx
 from groq.types.chat import ChatCompletion
 
 from emporio.adaptadores.llm._erros import cota_diaria_esgotada, erro_por_status, retry_after_dos_headers
+from emporio.adaptadores.llm._formato_openai import argumentos_tool, mensagens_openai, tools_openai, uso_tokens
 from emporio.portas.llm import (
     ChamadaTool,
     ErroLLM,
-    ErroLLMPermanente,
     ErroLLMTransitorio,
-    MensagemLLM,
-    PapelMensagem,
     RequisicaoLLM,
     RespostaLLM,
-    UsoTokens,
 )
 
 EsforcoGroq = Literal["low", "medium", "high"]
@@ -62,17 +58,11 @@ class ProvedorGroq:
 
     async def gerar(self, req: RequisicaoLLM) -> RespostaLLM:
         """Chama a API e converte erros do SDK para a porta."""
-        tools = [
-            {
-                "type": "function",
-                "function": {"name": t.nome, "description": t.descricao, "parameters": dict(t.parametros)},
-            }
-            for t in req.tools
-        ]
+        tools = tools_openai(req.tools)
         try:
             completion = await self._cliente.chat.completions.create(
                 model=self.modelo,
-                messages=cast(Any, _mensagens(req)),
+                messages=cast(Any, mensagens_openai(req)),
                 tools=cast(Any, tools) if tools else groq.omit,
                 tool_choice="auto" if tools else groq.omit,
                 reasoning_effort=self.esforco if self.esforco is not None else groq.omit,
@@ -88,7 +78,7 @@ class ProvedorGroq:
             raise ErroLLMTransitorio(f"{self._nome}: resposta sem choices")
         mensagem = completion.choices[0].message
         chamadas = tuple(
-            ChamadaTool(c.id, c.function.name, self._argumentos(c.function.name, c.function.arguments))
+            ChamadaTool(c.id, c.function.name, argumentos_tool(self._nome, c.function.name, c.function.arguments))
             for c in mensagem.tool_calls or ()
         )
         uso = completion.usage
@@ -98,47 +88,8 @@ class ProvedorGroq:
             provedor=self._nome,
             modelo=completion.model,
             chamadas_tool=chamadas,
-            uso=UsoTokens(
-                entrada=max(uso.prompt_tokens - cache, 0) if uso else 0,  # sem os tokens em cache
-                saida=uso.completion_tokens if uso else 0,
-                cache_leitura=cache,
-            ),
+            uso=uso_tokens(uso.prompt_tokens, uso.completion_tokens, cache) if uso else uso_tokens(0, 0, 0),
         )
-
-    def _argumentos(self, tool: str, argumentos: str) -> dict[str, object]:
-        if not argumentos.strip():
-            return {}
-        try:
-            valor = json.loads(argumentos)
-        except json.JSONDecodeError as erro:
-            raise ErroLLMPermanente(f"{self._nome}: argumentos da tool {tool!r} não são JSON válido") from erro
-        if not isinstance(valor, dict):
-            raise ErroLLMPermanente(f"{self._nome}: argumentos da tool {tool!r} não são um objeto JSON")
-        return cast(dict[str, object], valor)
-
-
-def _mensagens(req: RequisicaoLLM) -> list[dict[str, Any]]:
-    system = "\n\n".join(t for t in (req.system_cacheavel, req.system_dinamico) if t)
-    saida: list[dict[str, Any]] = [{"role": "system", "content": system}] if system else []
-    saida.extend(_mensagem(m) for m in req.mensagens)
-    return saida
-
-
-def _mensagem(m: MensagemLLM) -> dict[str, Any]:
-    if m.role is PapelMensagem.TOOL:
-        return {"role": "tool", "tool_call_id": m.tool_call_id or "", "content": m.content}
-    if m.role is PapelMensagem.ASSISTANT and m.tool_calls:
-        return {
-            "role": "assistant",
-            "content": m.content or None,
-            "tool_calls": [_chamada(c) for c in m.tool_calls],
-        }
-    return {"role": m.role.value, "content": m.content}
-
-
-def _chamada(c: ChamadaTool) -> dict[str, Any]:
-    argumentos = json.dumps(dict(c.argumentos), ensure_ascii=False)
-    return {"id": c.id, "type": "function", "function": {"name": c.nome, "arguments": argumentos}}
 
 
 def _converter(erro: groq.GroqError) -> ErroLLM:

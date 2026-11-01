@@ -159,3 +159,58 @@ def test_aplicacao_recebe_o_gateway_de_pagamento_pela_porta(tmp_path: Path) -> N
     """Hexagonal: a composição escolhe o adapter (hoje o fake, simulação) e a aplicação só conhece a porta."""
     app = montar(settings(), provedores={"falso": LLMFalso([])}, raiz=RAIZ, dir_estado=tmp_path)
     assert app.pagamento is not None and app.pagamento.nome == "fake"
+
+
+# --- provedor compatível com OpenAI (LLM_*) ----------------------------------------
+
+
+def test_sem_chave_cita_as_variaveis_do_provedor_compativel(tmp_path: Path) -> None:
+    with pytest.raises(ErroSemChaveLLM, match=r"LLM_API_KEY.*LLM_MODELO"):
+        montar(settings(), raiz=RAIZ, dir_estado=tmp_path)
+
+
+def test_so_o_compativel_configurado_monta_sem_rede(tmp_path: Path) -> None:
+    s = settings(llm_provedor="deepseek", llm_modelo="deepseek-chat", llm_api_key="sk-segredo-ds")
+    app = montar(s, raiz=RAIZ, dir_estado=tmp_path)
+    assert app.provedores == ("deepseek",)
+    assert "sk-segredo-ds" not in repr(app)
+
+
+@pytest.mark.parametrize(
+    ("valores", "trecho"),
+    [
+        ({"llm_api_key": "k"}, "LLM_MODELO é obrigatório"),
+        ({"llm_provedor": "fireworks", "llm_modelo": "m", "llm_api_key": "k"}, "defina LLM_BASE_URL"),
+        ({"llm_provedor": "groq"}, "LLM_PROVEDOR: 'groq' já é um provedor nativo"),
+    ],
+)
+def test_configuracao_llm_invalida_vira_erro_claro(valores: dict[str, object], trecho: str) -> None:
+    with pytest.raises(ErroConfiguracao) as erro:
+        carregar_settings(_env_file=None, **valores)
+    texto = str(erro.value)
+    assert trecho in texto and "Value error" not in texto
+    assert texto.startswith("Configuração inválida: ")
+
+
+async def test_diagnostico_mostra_nome_e_modelo_sem_vazar_chave() -> None:
+    s = settings(
+        llm_provedor="meu-vllm",
+        llm_modelo="qwen3-32b",
+        llm_api_key="sk-segredo-vllm",
+        llm_base_url="https://usuario:senha-url@vllm.exemplo.com:8443/v1?token=abc",
+    )
+    info = await montar_diagnostico(s, raiz=RAIZ).diagnosticar(TenantContext("emporio"))
+    assert info.provedores_com_chave == ("meu-vllm",)
+    assert info.llm_compativel == "meu-vllm (modelo qwen3-32b, endpoint https://vllm.exemplo.com:8443/v1)"
+    texto = repr(info)
+    for segredo in ("sk-segredo-vllm", "senha-url", "token=abc"):
+        assert segredo not in texto
+
+
+async def test_diagnostico_sem_compativel_e_endpoint_padrao() -> None:
+    info = await montar_diagnostico(settings(), raiz=RAIZ).diagnosticar(TenantContext("emporio"))
+    assert info.llm_compativel is None
+    assert any("LLM_API_KEY" in a for a in info.avisos)
+    padrao = settings(llm_modelo="gpt-4o-mini", llm_api_key="sk-x")
+    info = await montar_diagnostico(padrao, raiz=RAIZ).diagnosticar(TenantContext("emporio"))
+    assert info.llm_compativel == "openai (modelo gpt-4o-mini, endpoint padrão do SDK da OpenAI)"

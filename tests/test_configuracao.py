@@ -81,6 +81,95 @@ def test_provedores_com_chave_lista_so_quem_tem_chave(monkeypatch: pytest.Monkey
     assert s2.provedores_com_chave() == ("claude", "gemini", "groq")
 
 
+# --- Provedor compatível com OpenAI (LLM_*) ------------------------------------
+
+
+def _llm(**valores: object) -> Settings:
+    return Settings(_env_file=None, **valores)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("nome", "url"),
+    [
+        ("openai", None),
+        ("deepseek", "https://api.deepseek.com"),
+        ("openrouter", "https://openrouter.ai/api/v1"),
+        ("mistral", "https://api.mistral.ai/v1"),
+        ("together", "https://api.together.xyz/v1"),
+        ("ollama", "http://localhost:11434/v1"),
+    ],
+)
+def test_llm_preset_por_nome(nome: str, url: str | None) -> None:
+    s = _llm(llm_provedor=nome, llm_modelo="m", llm_api_key="k")
+    config = s.llm_compativel()
+    assert config is not None and (config.nome, config.modelo, config.base_url) == (nome, "m", url)
+    assert s.provedores_com_chave() == (nome,)
+
+
+def test_llm_padrao_e_openai_e_inativo_sem_chave() -> None:
+    s = _llm()
+    assert s.llm_provedor == "openai"
+    assert s.llm_compativel() is None
+    assert _llm(llm_modelo="gpt-4o-mini").llm_compativel() is None  # modelo sem chave: só inativo
+    assert _llm(llm_api_key="   ", llm_modelo="m").provedores_com_chave() == ()
+
+
+def test_llm_le_variaveis_de_ambiente(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVEDOR", " DeepSeek ")
+    monkeypatch.setenv("LLM_MODELO", "deepseek-chat")
+    monkeypatch.setenv("LLM_API_KEY", "sk-segredo-deepseek")
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    s = Settings(_env_file=None)
+    config = s.llm_compativel()
+    assert config is not None and config.nome == "deepseek" and config.base_url == "https://api.deepseek.com"
+    assert "sk-segredo-deepseek" not in repr(s) + str(s) + repr(config)
+
+
+def test_llm_base_url_explicita_vence_o_preset() -> None:
+    s = _llm(llm_provedor="ollama", llm_modelo="qwen3", llm_api_key="ollama", llm_base_url="http://gpu:11434/v1")
+    config = s.llm_compativel()
+    assert config is not None and config.base_url == "http://gpu:11434/v1"
+
+
+def test_llm_nome_desconhecido_com_url_funciona() -> None:
+    s = _llm(llm_provedor="meu-vllm", llm_modelo="m", llm_api_key="k", llm_base_url="https://vllm.local/v1")
+    assert s.provedores_com_chave() == ("meu-vllm",)
+
+
+def test_llm_nome_desconhecido_sem_url_e_erro() -> None:
+    with pytest.raises(ValidationError, match="LLM_BASE_URL"):
+        _llm(llm_provedor="fireworks", llm_modelo="m", llm_api_key="k")
+
+
+@pytest.mark.parametrize("nome", ["groq", "gemini", "claude", "Groq"])
+def test_llm_nome_colide_com_nativo(nome: str) -> None:
+    with pytest.raises(ValidationError, match="nativo"):
+        _llm(llm_provedor=nome)
+
+
+@pytest.mark.parametrize("nome", ["open ai", "deep.seek", "x/y", "ção"])
+def test_llm_nome_invalido(nome: str) -> None:
+    with pytest.raises(ValidationError, match="llm_provedor"):
+        _llm(llm_provedor=nome)
+
+
+def test_llm_chave_sem_modelo_e_erro() -> None:
+    with pytest.raises(ValidationError, match="LLM_MODELO"):
+        _llm(llm_api_key="k")
+    with pytest.raises(ValidationError, match="LLM_MODELO"):
+        _llm(llm_api_key="k", llm_modelo="  ")
+
+
+def test_llm_base_url_sem_esquema_e_erro() -> None:
+    with pytest.raises(ValidationError, match="http"):
+        _llm(llm_provedor="x", llm_modelo="m", llm_api_key="k", llm_base_url="api.exemplo.com/v1")
+
+
+def test_llm_compativel_entra_depois_dos_nativos() -> None:
+    s = _llm(google_api_key="g", groq_api_key="q", llm_provedor="openrouter", llm_modelo="m", llm_api_key="k")
+    assert s.provedores_com_chave() == ("gemini", "groq", "openrouter")
+
+
 # --- Carregador de tenants ---------------------------------------------------
 
 
