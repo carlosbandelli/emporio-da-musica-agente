@@ -488,6 +488,7 @@ and Prometheus (section 1, path 2), and the CI. Left out:
 
 ### 8.2 Known limitations
 
+- **Final-review findings accepted** (assumption #167): rate limiting only on the `sessao` and `tenant` layers (the `usuario` and `provedor` layers are configured but not applied); two concurrent messages on the same session can lose a turn; the Redis promotions cache can be up to 60 s stale; a circuit probe stays held for 30 s if the message deadline expires during it.
 - **Local mode.** Without `DATABASE_URL` and `REDIS_URL`, session, rate limit and circuit state are in memory, per process.
   History is lost when `chat` exits.
 - **Redis down.** The conversation continues without history (fail-open, section 4.8). No call fails because of Redis.

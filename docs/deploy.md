@@ -9,9 +9,9 @@ Como a aplicação é empacotada, executada, escalada e observada. As decisões 
 |---|---|
 | `Dockerfile` | Build multi-stage: `builder` (uv, instala pelo `uv.lock`) e `runtime` (slim, usuário não-root UID 10001, HEALTHCHECK em `/health`). |
 | `.dockerignore` | Exclui `.env`, `.mcp.json`, `.claude/`, `.git`, caches e o PDF do enunciado do contexto de build. |
-| `docker-compose.yml` | Traefik, app em réplicas, migração (one-shot), Postgres 16, Redis 7 e, no perfil `observabilidade`, OTel Collector, Prometheus, Loki, Alloy e Grafana. |
+| `docker-compose.yml` | Traefik, app em réplicas, migração (one-shot), Postgres 16, Redis 7 e Prometheus; no perfil `observabilidade`, OTel Collector, Loki e Alloy (sem Grafana, premissa #106). |
 | `deploy/traefik/usuarios.htpasswd` | Usuário de exemplo do basic auth (dashboard do Traefik e Grafana). |
-| `deploy/observabilidade/` | Configs do Collector, Prometheus, Loki, Alloy e Grafana (datasources e dashboard `agente.json` provisionados). |
+| `deploy/observabilidade/` | Configs do Collector, Prometheus, Loki e Alloy. A pasta `grafana/` (datasources e dashboard `agente.json`) é trabalho futuro: o Grafana não sobe nesta entrega (premissa #106). |
 | `deploy/k8s/base/` | Namespace, ConfigMap, Secret de **exemplo**, Deployment, Service, Ingress (`networking.k8s.io/v1`, `ingressClassName: traefik`), middlewares Traefik, HPA, VPA (modo `Off`), PDB e Job de migração. |
 | `deploy/k8s/overlays/producao/` | Remove o Secret de exemplo, fixa a imagem por SHA, ajusta recursos, TLS e faixa do HPA. |
 | `.github/workflows/ci-cd.yml` | lint (ruff) → tipos (mypy) → testes (pytest com Postgres e Redis) → build/push no GHCR (só na `main`, tag por SHA) → scan (trivy) → deploy com environment `producao`. |
@@ -34,7 +34,7 @@ Entrada única: `http://localhost` (só o Traefik publica porta). Endereços:
 |---|---|
 | `http://localhost/v1/...` | API da loja (`/v1/chat`, `/v1/admin`, `/v1/tools`). |
 | `http://localhost/traefik/dashboard/` | Dashboard do Traefik. Basic auth de exemplo: `admin` / `troque-esta-senha`. |
-| `http://localhost/grafana/` | Grafana (perfil `observabilidade`). Basic auth do Traefik e login do Grafana (`GRAFANA_ADMIN_PASSWORD`, padrão `troque-esta-senha`). |
+| `http://localhost/grafana/` | Não disponível nesta entrega: Grafana ficou como melhoria futura (premissa #106). |
 
 Trocar a senha do basic auth: `htpasswd -nB admin` gera o hash (ou um `bcrypt` equivalente), e o resultado vai para
 `deploy/traefik/usuarios.htpasswd`. Não há sticky session, então cada requisição pode cair em qualquer réplica.
@@ -116,7 +116,7 @@ ser compatíveis com a versão anterior da app (expand/contract).
 ## 6. Contrato de métricas da aplicação
 
 A app deve expor `/metrics` no formato Prometheus, na porta 8000. Essa rota **não** passa pelo Traefik nem pelo Ingress.
-Os nomes abaixo são o contrato usado pelo dashboard `deploy/observabilidade/grafana/dashboards/agente.json`.
+Os nomes abaixo são o contrato da aplicação (verificado por teste) e o que o dashboard futuro `deploy/observabilidade/grafana/dashboards/agente.json`.
 
 Regras: todo rótulo de tenant se chama `tenant_id` (arquitetura §7). Nunca use como rótulo `session_id`, ID de usuário ou
 caminho bruto de URL (cardinalidade). Use o template da rota (ex.: `/v1/chat`).

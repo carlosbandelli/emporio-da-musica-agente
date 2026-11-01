@@ -482,6 +482,7 @@ Prometheus (seção 1, caminho 2), e o CI. Ficaram de fora:
 
 ### 8.2 Limitações conhecidas
 
+- **Achados da revisão final aceitos** (premissa #167): rate limit só nas camadas `sessao` e `tenant` (as camadas `usuario` e `provedor` estão configuradas mas não aplicadas); duas mensagens simultâneas na mesma sessão podem perder um turno; cache de promoções no Redis pode ficar até 60 s desatualizado; sonda do circuito presa por 30 s se o prazo da mensagem estourar durante ela.
 - **Modo local.** Sem `DATABASE_URL` e `REDIS_URL`, sessão, rate limit e circuito ficam em memória, por processo. O
   histórico some ao sair do `chat`.
 - **Redis fora.** A conversa segue sem histórico (fail-open, seção 4.8). Nenhuma chamada falha por causa do Redis.
