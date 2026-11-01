@@ -4,7 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This is a technical challenge (Artefact, AI Engineer 2026). Planning is done; no application code exists yet.
+This is a technical challenge (Artefact, AI Engineer 2026). Planning is done; Phase 1 is in progress (task 1.0 scaffold in place: package tree, tooling, import-linter; no
+agent logic yet).
 The brief PDF is local only (gitignored). Source of truth for decisions:
 
 - `docs/arquitetura.md`: architecture (agentic + CAG, LLM routing Groq/Gemini/Claude, modular monolith, hexagonal at
@@ -14,7 +15,33 @@ The brief PDF is local only (gitignored). Source of truth for decisions:
 - `docs/pagamento.md` (payment port design) and `docs/deploy.md` (deploy artifacts and the metrics contract the code
   must expose). The deploy files assume module/port/env names listed there: follow them.
 
-Once code, a dependency manifest and run/test commands exist, add them to this file.
+## Commands
+
+Python 3.12 via uv (`.python-version`); the CLI is the `emporio` script (`emporio.adaptadores.cli:app`).
+
+- Setup: `uv sync --all-groups`
+- Run: `uv run emporio --help`
+- Tests: `uv run pytest` (marker `llm_real` = tests that call a real LLM, skipped without a key)
+- Full gate: `uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run lint-imports && uv run pytest`
+
+## Source tree (`src/emporio/`)
+
+- `modulos/`: modular monolith, pure Python, no I/O or SDKs. `comum/` (shared kernel), `catalogo/`, `comercial/`,
+  `pedidos/`, `politicas/`, `atendimento/`; each has `dominio.py` (rules) and `aplicacao.py` (use cases/tools, the
+  module's public API).
+- `portas/`: Protocol contracts and shared types (e.g. `TenantContext`).
+- `adaptadores/`: swappable implementations: `cli/` (entry), `motor/nativo/` (agent engine), `llm/`, `csv/`,
+  `memoria/`. Phase 2 adds `api/`, `motor/n8n/`, `db/`, `redis/`.
+- `composicao.py`: composition root, the only place that wires ports to adapters.
+- `config/` (repo root): per-tenant config (`tenants.yaml`, policy manual in text), copied by the Dockerfile.
+
+Dependency rules (inward only), enforced by import-linter in `pyproject.toml` (`uv run lint-imports`, also in CI).
+Layer order: `composicao` > `adaptadores` > `modulos.*.aplicacao` > `portas` > `modulos.*.dominio` (+ `comum`).
+- C1: no layer imports an outer one (`dominio`/`comum` import nothing from the project but `comum`).
+- C2: `modulos` and `portas` import no external SDK/framework (groq, google, anthropic, httpx, sqlalchemy, redis, fastapi, typer).
+- C3: a module never imports another module's `dominio` (only its `aplicacao`); `comum` is allowed.
+- C4: entry adapters (`cli`, later `api`) import only `portas` and `composicao`.
+- C5: adapters are independent of each other.
 
 ## How we work (agreed with the user)
 

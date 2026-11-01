@@ -6,6 +6,16 @@
 
 # Configurações locais do Claude Code
 .claude/settings.local.json
+.claude/memory/
+.claude/sessions/
+.claude/state/
+.claude/worktrees/
+.harness/
+
+# Estado local da aplicação e relatórios de teste
+var/
+.coverage
+htmlcov/
 
 # Grafo do code-review-graph
 .code-review-graph/
