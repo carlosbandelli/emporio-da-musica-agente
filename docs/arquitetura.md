@@ -238,7 +238,26 @@ Cuidados:
 
 - **API FastAPI**: `POST /v1/chat` (`session_id`, mensagem; tenant pelo subdomínio/header), endpoints admin,
   `/v1/tools/*`, `/health`, `/ready`, `/metrics` (interno).
-- **CLI** que consome a API para conversar no terminal.
+- **CLI** (`uv run emporio ...`, entry point de `emporio.adaptadores.cli`) com dois modos:
+  - **local (padrão)**: chama o núcleo **no mesmo processo**, sem API no ar — CSVs + adapters em memória;
+  - **remoto** (`--api URL`): consome a API (usado com o docker-compose).
+- Comandos: `chat`, `diagnostico` (chaves encontradas, modo ativo, dados carregados), `token` (gera JWT de teste).
+
+### 9.1 Como o avaliador roda o projeto (requisito)
+
+A primeira seção do README é "Como rodar em 5 minutos", com comandos para Windows, macOS e Linux.
+
+| Caminho | Pré-requisitos | Comandos | O que mostra |
+|---|---|---|---|
+| **1. Rápido** (padrão) | git + uv (o uv instala o Python 3.12) | `git clone` → `uv sync` → `cp .env.example .env` (uma chave) → `uv run emporio chat` | o agente completo, sobre os CSVs, sem Docker/Postgres/Redis |
+| **2. Completo** | + Docker | `docker compose up -d` (+ `--profile observabilidade`) | réplicas, Traefik, schema por tenant, rate limit, dashboards |
+| **3. Sem rodar** | nenhum | ler `exemplos/`; `uv run pytest` | conversas gravadas; regras de negócio testadas **sem chave de API** (LLMs simulados) |
+
+- **Basta uma chave de LLM** (Gemini grátis recomendado): o roteador usa só os provedores com chave; sem a chave do
+  Claude, o nível complexo cai no Gemini.
+- Nenhuma chave nossa vai para o repositório. Opcional: chave com limite de gasto enviada no e-mail de entrega,
+  fora do repositório.
+- Critério de aceite do núcleo: um clone limpo, seguindo só o README, conversa com o agente no caminho 1.
 
 ## 10. Idiomas do atendimento (pt-BR / en-US)
 
