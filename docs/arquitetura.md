@@ -411,8 +411,9 @@ Exemplo:
 
 ## 10. Idiomas do atendimento (pt-BR / en-US)
 
-- **Primeira mensagem** pergunta o idioma ("Prefere ser atendido em Português ou English?"), **exceto** quando a
-  primeira mensagem do cliente já está claramente em um idioma: aí responde direto nele.
+- **Idioma detectado, não perguntado** (revisado em 2026-11-01, premissa #57): heurística por palavras pt × en na
+  mensagem; ambíguo → idioma do canal (`--idioma` na CLI, `idioma`/`Accept-Language` na API, senão o padrão do
+  tenant), sem fixar na sessão. Perguntar custaria um turno e perderia a pergunta original.
 - Idioma salvo na **sessão** (Redis); o cliente pode trocar a qualquer momento.
 - API: campo opcional `idioma` em `POST /v1/chat` ou header `Accept-Language` (canal que já sabe o idioma pula a
   pergunta).
