@@ -1,0 +1,28 @@
+# Base kustomize do Empório da Música (app + Ingress + escalonamento + migração).
+# Postgres e Redis NÃO estão aqui: em produção são serviços gerenciados externos (URLs no Secret).
+# Aplicar só a base (sem overlay): kubectl apply -k deploy/k8s/base
+# Pré-requisitos no cluster: Traefik como Ingress Controller, metrics-server (HPA) e CRDs do VPA.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: emporio
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.exemplo.yaml
+  - deployment.yaml
+  - service.yaml
+  - middlewares.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - vpa.yaml
+  - pdb.yaml
+  - job-migracao.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: emporio
+    includeSelectors: false
+    includeTemplates: true

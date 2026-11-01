@@ -1,0 +1,11 @@
+# PDB: em manutenção de nós (drain) ou upgrade do cluster, no máximo 1 réplica fica indisponível por vez.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: emporio-app
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: emporio
+      app.kubernetes.io/component: app

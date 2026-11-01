@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: emporio
+    orgId: 1
+    folder: Empório da Música
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

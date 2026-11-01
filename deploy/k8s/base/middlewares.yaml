@@ -1,0 +1,41 @@
+# Middlewares do Traefik (CRDs). Referenciados pelo Ingress via annotation
+# "traefik.ingress.kubernetes.io/router.middlewares" no formato <namespace>-<nome>@kubernetescrd.
+# Requer os CRDs do Traefik (instalados com o chart Helm; ver docs/deploy.md).
+#
+# Rate limit por IP: é o limite de borda (arquitetura §6). Os limites por sessão, usuário e tenant
+# ficam na app, porque dependem do negócio.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ratelimit-ip
+spec:
+  rateLimit:
+    average: 20
+    burst: 60
+    period: 1s
+    sourceCriterion:
+      ipStrategy:
+        # Número de proxies confiáveis à frente do Traefik (ex.: o load balancer da nuvem).
+        # Com depth 0, todos os clientes pareceriam vir do IP do balanceador.
+        depth: 1
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: headers
+spec:
+  headers:
+    contentTypeNosniff: true
+    frameDeny: true
+    referrerPolicy: strict-origin-when-cross-origin
+    stsSeconds: 31536000
+    customResponseHeaders:
+      # Vazio = remove o header (não revelar o servidor).
+      Server: ""
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: compress
+spec:
+  compress: {}

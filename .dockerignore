@@ -1,0 +1,40 @@
+# Contexto de build enxuto: nada que não seja necessário para a imagem.
+
+# Segredos e configuração local: NUNCA entram na imagem
+.env
+.env.*
+**/.env
+**/.env.*
+.mcp.json
+**/.mcp.json
+
+# Configuração do Claude Code e controle de versão
+.claude/
+.git/
+.gitignore
+.gitattributes
+
+# Caches e artefatos locais de Python e ferramentas
+**/__pycache__/
+**/*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+**/*.egg-info/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Enunciado do processo seletivo (material da Artefact, não publicar)
+desafio_tecnico_ai_eng_artefact.pdf
+
+# Não usados pela imagem (docs, manifestos e CI ficam fora do contexto)
+docs/
+deploy/
+.github/
+docker-compose.yml
+Dockerfile
+.dockerignore

@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: emporio-app
+  labels:
+    app.kubernetes.io/name: emporio
+    app.kubernetes.io/component: app
+spec:
+  # Ponto de partida. Com HPA ativo, o HPA define o número de réplicas (ver hpa.yaml).
+  replicas: 3
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Sem indisponibilidade: sobe uma réplica nova antes de derrubar uma antiga.
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: emporio
+      app.kubernetes.io/component: app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: emporio
+        app.kubernetes.io/component: app
+    spec:
+      terminationGracePeriodSeconds: 30
+      # A app não chama a API do Kubernetes: sem token montado.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Espalha as réplicas por zona e por nó (alta disponibilidade sem exigir zonas perfeitas).
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: app
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: app
+      containers:
+        - name: app
+          # Trocada pelo overlay (kustomize images). Nunca usar "latest" em produção.
+          image: emporio:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: emporio-config
+            - secretRef:
+                name: emporio-segredos
+          # Startup: dá tempo ao primeiro boot (carga de config e manual) sem matar o pod.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          # Liveness: só checa se o processo responde. NÃO depende de Postgres/Redis.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Readiness: checa Postgres e Redis (/ready). Tira o pod do Service sem reiniciá-lo.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              exec:
+                # Dá tempo ao Traefik para parar de enviar tráfego antes do SIGTERM.
+                command: ["sleep", "5"]
+          # Requests: base para o agendamento e para o HPA (utilização = uso / request).
+          # Limits: teto de memória e CPU. Ajuste pelo VPA (modo recomendação) ou pelo overlay.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

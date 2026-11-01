@@ -1,0 +1,32 @@
+# VPA em modo de RECOMENDAÇÃO ("Off"): só calcula sugestões de requests/limits.
+# Requer o VPA instalado no cluster (CRD autoscaling.k8s.io/v1; não vem com o Kubernetes).
+#
+# Por que "Off" e não "Auto" com o HPA:
+#   - HPA escala por utilização = uso / request de CPU e memória.
+#   - VPA em "Auto" ou "Recreate" muda os requests sozinho e reinicia os pods, e isso muda
+#     o denominador do HPA. Os dois brigam (oscilação de réplicas e de requests).
+#   - Regra prática: VPA não pode controlar os mesmos recursos que o HPA usa como métrica.
+#     Com HPA ativo, usamos o VPA só para recomendação e aplicamos os valores manualmente
+#     (ou no overlay), com revisão.
+# Ver as recomendações: kubectl -n emporio describe vpa emporio-app
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: emporio-app
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: emporio-app
+  updatePolicy:
+    updateMode: "Off"
+  resourcePolicy:
+    containerPolicies:
+      - containerName: app
+        minAllowed:
+          cpu: 100m
+          memory: 128Mi
+        maxAllowed:
+          cpu: "2"
+          memory: 1Gi
+        controlledResources: ["cpu", "memory"]

@@ -1,0 +1,28 @@
+# Produção: HTTPS na entrada e certificado emitido pelo cert-manager (ou use o certresolver do Traefik).
+# O host é o mesmo da base; para multi-tenant por subdomínio, adicione um host por loja ou um wildcard
+# conforme o suporte do controller (ver docs/deploy.md).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: emporio
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-producao
+    traefik.ingress.kubernetes.io/router.middlewares: emporio-ratelimit-ip@kubernetescrd,emporio-headers@kubernetescrd,emporio-compress@kubernetescrd
+spec:
+  tls:
+    - hosts:
+        - emporio.api.exemplo.com
+      secretName: emporio-tls
+  rules:
+    - host: emporio.api.exemplo.com
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: emporio-app
+                port:
+                  name: http

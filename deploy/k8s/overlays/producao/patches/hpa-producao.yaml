@@ -1,0 +1,8 @@
+# Produção: faixa de escalonamento maior que a base.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: emporio-app
+spec:
+  minReplicas: 3
+  maxReplicas: 12

@@ -1,0 +1,10 @@
+# Configuração não sensível. Segredos ficam no Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: emporio-config
+data:
+  LOG_LEVEL: "INFO"
+  TENANTS_CONFIG: "config/tenants.yaml"
+  # Collector de OTLP no cluster (ajuste ao local onde a stack de observabilidade estiver).
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observabilidade.svc:4318"

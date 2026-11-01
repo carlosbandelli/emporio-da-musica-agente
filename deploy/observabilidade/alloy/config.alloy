@@ -1,0 +1,38 @@
+// Grafana Alloy: coleta o stdout de todos os containers do Docker e envia ao Loki.
+// Substitui o Promtail (descontinuado). Os rótulos "service" e "projeto" vêm do compose.
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "projeto"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.write.padrao.receiver]
+}
+
+loki.write "padrao" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

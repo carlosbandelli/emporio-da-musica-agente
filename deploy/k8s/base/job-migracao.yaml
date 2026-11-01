@@ -1,0 +1,59 @@
+# Job de migração e seed (mesma imagem da app). Roda antes do rollout da Deployment.
+# Job é imutável: a pipeline remove o Job anterior antes de aplicar um novo (ver .github/workflows/ci-cd.yml).
+# Migrações devem ser compatíveis com a versão anterior da app (expand/contract), porque
+# as réplicas antigas podem continuar no ar durante a transição.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: emporio-migracao
+  labels:
+    app.kubernetes.io/name: emporio
+    app.kubernetes.io/component: migracao
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: emporio
+        app.kubernetes.io/component: migracao
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migracao
+          # Trocada pelo overlay (kustomize images), igual à Deployment.
+          image: emporio:latest
+          command: ["python", "-m", "emporio.adaptadores.db.migrar"]
+          envFrom:
+            - configMapRef:
+                name: emporio-config
+            - secretRef:
+                name: emporio-segredos
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

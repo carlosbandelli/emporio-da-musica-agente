@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: emporio
+  labels:
+    app.kubernetes.io/name: emporio
+    # Pod Security Standards: a app roda como não-root com perfil restrito.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

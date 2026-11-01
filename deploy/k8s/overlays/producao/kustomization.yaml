@@ -1,0 +1,31 @@
+# Overlay de produção. Exemplo: não há cluster real neste repositório.
+# A pipeline (.github/workflows/ci-cd.yml) define a imagem com
+#   kustomize edit set image emporio=ghcr.io/<owner>/emporio:<sha>
+# antes de aplicar. Os valores de newName/newTag abaixo são só placeholders.
+#
+# Visualizar sem aplicar:  kubectl kustomize deploy/k8s/overlays/producao
+# Aplicar (com aprovação):  kubectl apply -k deploy/k8s/overlays/producao
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - name: emporio
+    newName: ghcr.io/SEU-USUARIO/emporio
+    newTag: sem-tag-definir-pela-pipeline
+
+patches:
+  # Remove o Secret de exemplo: em produção o Secret vem do External Secrets / Sealed Secrets.
+  - path: patches/remover-secret-exemplo.yaml
+  - path: patches/deployment-producao.yaml
+  - path: patches/ingress-producao.yaml
+  - path: patches/hpa-producao.yaml
+
+labels:
+  - pairs:
+      ambiente: producao
+    includeSelectors: false
+    includeTemplates: true

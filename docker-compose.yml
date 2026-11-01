@@ -1,0 +1,287 @@
+# Ambiente local do Empório da Música.
+#
+# Essencial (Traefik + app em réplicas + Postgres + Redis + migração):
+#   docker compose up -d --build
+# Com observabilidade (OTel Collector, Prometheus, Loki, Alloy, Grafana):
+#   docker compose --profile observabilidade up -d --build
+# Escalar a app (horizontal):
+#   APP_REPLICAS=5 docker compose up -d        (ou: docker compose up -d --scale app=5)
+#
+# Segredos ficam no .env (copie de .env.example). Este arquivo não contém segredos reais.
+# Entrada única: http://localhost (o Traefik é o único serviço com porta publicada).
+
+name: emporio
+
+# Bloco comum da app e da migração (mesma imagem, mesmo build).
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: runtime
+  image: emporio:local
+  env_file:
+    - path: .env
+      required: false
+  # environment sobrescreve o .env: dentro do compose, os hosts são os nomes dos serviços.
+  environment:
+    DATABASE_URL: postgresql+psycopg://emporio:${POSTGRES_PASSWORD:-emporio-dev}@postgres:5432/emporio
+    REDIS_URL: redis://redis:6379/0
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  networks:
+    - borda
+    - dados
+  restart: unless-stopped
+
+services:
+  # ---------------------------------------------------------------------------
+  # Borda: load balancer, reverse proxy e API gateway
+  # ---------------------------------------------------------------------------
+  traefik:
+    image: traefik:v3.5
+    command:
+      - --log.level=INFO
+      - --log.format=json
+      - --accesslog=true
+      - --accesslog.format=json
+      # Provider Docker: descobre as réplicas da app pelas labels. Só expõe o que tiver traefik.enable=true.
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=borda
+      - --entrypoints.web.address=:80
+      # TLS (opcional, ver comentários abaixo): --entrypoints.websecure.address=:443
+      # Entrada interna para métricas e health. Não é publicada, então /metrics do Traefik não é público.
+      - --entrypoints.metrics.address=:8082
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entryPoint=metrics
+      - --metrics.prometheus.addrouterslabels=true
+      - --ping=true
+      - --ping.entryPoint=metrics
+      # Dashboard: acessível só via router com basic auth (label traefik.http.routers.traefik.*).
+      - --api.dashboard=true
+      # Traces da borda para o OTel Collector (perfil observabilidade).
+      - --tracing.serviceName=traefik
+      - --tracing.otlp.http=true
+      - --tracing.otlp.http.endpoint=http://otel-collector:4318/v1/traces
+      # Let's Encrypt (produção com domínio público). Descomente e ajuste o e-mail:
+      # - --entrypoints.websecure.address=:443
+      # - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-voce@exemplo.com}
+      # - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      # - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      # - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./deploy/traefik/usuarios.htpasswd:/etc/traefik/usuarios.htpasswd:ro
+      # - ./deploy/traefik/letsencrypt:/letsencrypt
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - borda
+      - dados
+    labels:
+      - traefik.enable=true
+      # Middlewares de borda, definidos aqui e referenciados nos routers por "nome@docker".
+      # Rate limit por IP: 20 req/s com rajada de 60. Cuidado com NAT de operadora (muitos clientes por IP).
+      - traefik.http.middlewares.gw-ratelimit.ratelimit.average=20
+      - traefik.http.middlewares.gw-ratelimit.ratelimit.burst=60
+      - traefik.http.middlewares.gw-ratelimit.ratelimit.period=1s
+      # Headers de segurança
+      - traefik.http.middlewares.gw-headers.headers.contenttypenosniff=true
+      - traefik.http.middlewares.gw-headers.headers.framedeny=true
+      - traefik.http.middlewares.gw-headers.headers.referrerpolicy=strict-origin-when-cross-origin
+      - traefik.http.middlewares.gw-headers.headers.stsseconds=31536000
+      - traefik.http.middlewares.gw-headers.headers.customresponseheaders.server=
+      # Compressão
+      - traefik.http.middlewares.gw-compress.compress=true
+      # Basic auth de exemplo (usuário admin / senha troque-esta-senha; troque antes de usar em qualquer lugar real)
+      - traefik.http.middlewares.auth-operacao.basicauth.usersfile=/etc/traefik/usuarios.htpasswd
+      - traefik.http.middlewares.auth-operacao.basicauth.removeheader=true
+      # Dashboard do Traefik em /traefik/dashboard/ (prefixo removido antes do api@internal)
+      - traefik.http.middlewares.traefik-strip.stripprefix.prefixes=/traefik
+      - traefik.http.routers.traefik.rule=PathPrefix(`/traefik`)
+      - traefik.http.routers.traefik.entrypoints=web
+      - traefik.http.routers.traefik.service=api@internal
+      - traefik.http.routers.traefik.middlewares=traefik-strip@docker,auth-operacao@docker,gw-headers@docker
+
+  # ---------------------------------------------------------------------------
+  # Aplicação: N réplicas stateless atrás do Traefik
+  # ---------------------------------------------------------------------------
+  app:
+    <<: *app
+    expose:
+      - "8000"
+    deploy:
+      replicas: ${APP_REPLICAS:-3}
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 128M
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=borda
+      # Só /v1/* é roteado. /metrics, /health e /ready NÃO passam pela borda.
+      - traefik.http.routers.app.rule=PathPrefix(`/v1`)
+      - traefik.http.routers.app.entrypoints=web
+      - traefik.http.routers.app.middlewares=gw-ratelimit@docker,gw-headers@docker,gw-compress@docker
+      # Sem retry no gateway: cada tentativa de POST /v1/chat custa uma chamada de LLM (resiliência fica na app).
+      - traefik.http.services.app.loadbalancer.server.port=8000
+      # Health ativo do Traefik: tira da rotação a réplica que não responde (liveness). Sem sticky sessions.
+      - traefik.http.services.app.loadbalancer.healthcheck.path=/health
+      - traefik.http.services.app.loadbalancer.healthcheck.interval=10s
+
+  # Migração e seed: one-shot, roda antes da app. Usa advisory lock, então várias réplicas não colidem.
+  migrate:
+    <<: *app
+    command: ["python", "-m", "emporio.adaptadores.db.migrar"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Dados (rede interna, sem saída para a internet)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: emporio
+      POSTGRES_USER: emporio
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-emporio-dev}
+    volumes:
+      - postgres-dados:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U emporio -d emporio"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - dados
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # AOF ligado: sessões e token buckets são fonte da verdade (arquitetura §5.3).
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-dados:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - dados
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Observabilidade (perfil "observabilidade")
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    profiles: ["observabilidade"]
+    image: otel/opentelemetry-collector-contrib:0.128.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/observabilidade/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    networks:
+      - dados
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["observabilidade"]
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./deploy/observabilidade/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-dados:/prometheus
+    networks:
+      - dados
+    restart: unless-stopped
+
+  loki:
+    profiles: ["observabilidade"]
+    image: grafana/loki:3.5.0
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./deploy/observabilidade/loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki-dados:/loki
+    networks:
+      - dados
+    restart: unless-stopped
+
+  # Coleta dos logs de todos os contêineres (stdout) e envio ao Loki. Substitui o Promtail, que está descontinuado.
+  alloy:
+    profiles: ["observabilidade"]
+    image: grafana/alloy:v1.11.0
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./deploy/observabilidade/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Leitura do socket do Docker: dá acesso amplo ao host. Em produção, use um socket-proxy.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-dados:/var/lib/alloy/data
+    networks:
+      - dados
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["observabilidade"]
+    image: grafana/grafana:12.2.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-troque-esta-senha}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Servido em /grafana atrás do Traefik (sem remover o prefixo)
+      GF_SERVER_ROOT_URL: http://localhost/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/agente.json
+    volumes:
+      - ./deploy/observabilidade/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observabilidade/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-dados:/var/lib/grafana
+    networks:
+      - borda
+      - dados
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+      - traefik.http.routers.grafana.rule=PathPrefix(`/grafana`)
+      - traefik.http.routers.grafana.entrypoints=web
+      - traefik.http.routers.grafana.middlewares=auth-operacao@docker,gw-headers@docker
+    restart: unless-stopped
+
+networks:
+  # Borda: única rede com porta publicada (Traefik) e com saída para a internet (LLMs).
+  borda: {}
+  # Dados: sem saída para a internet. Postgres, Redis, observabilidade ficam isolados.
+  # A app também está na borda, então as chamadas aos provedores de LLM continuam funcionando.
+  dados:
+    internal: true
+
+volumes:
+  postgres-dados:
+  redis-dados:
+  prometheus-dados:
+  loki-dados:
+  alloy-dados:
+  grafana-dados:

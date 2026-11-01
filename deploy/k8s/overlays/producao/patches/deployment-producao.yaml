@@ -1,0 +1,17 @@
+# Recursos de produção. O HPA controla o número de réplicas (mín. 3, máx. 12).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: emporio-app
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          resources:
+            requests:
+              cpu: 500m
+              memory: 384Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi

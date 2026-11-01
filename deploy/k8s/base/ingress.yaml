@@ -1,0 +1,24 @@
+# Ingress padrão (networking.k8s.io/v1). O Traefik lê este recurso como Ingress Controller.
+# Trocar o controller (ex.: NGINX) não invalida o roteamento; só as annotations de middleware são do Traefik.
+# Tenant por subdomínio: o host é repassado à app, que resolve o tenant (arquitetura §6).
+# /metrics, /health e /ready NÃO são roteados: só o prefixo /v1.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: emporio
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: emporio-ratelimit-ip@kubernetescrd,emporio-headers@kubernetescrd,emporio-compress@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: emporio.api.exemplo.com
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: emporio-app
+                port:
+                  name: http

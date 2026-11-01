@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: emporio-app
+  labels:
+    app.kubernetes.io/name: emporio
+    app.kubernetes.io/component: app
+spec:
+  type: ClusterIP
+  # Sem sessionAffinity: a app é stateless (sessão no Redis), não há sticky sessions.
+  selector:
+    app.kubernetes.io/name: emporio
+    app.kubernetes.io/component: app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

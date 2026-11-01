@@ -1,0 +1,268 @@
+# Pipeline CI/CD do Empório da Música.
+# Estágios em cadeia: lint -> tipos -> testes -> build/push (main) -> scan (main) -> deploy (main, com aprovação).
+#
+# Observação: o deploy é um EXEMPLO. Não há cluster real neste repositório. Os secrets e o environment
+# "producao" precisam ser configurados no GitHub antes de uso (ver docs/deploy.md).
+#
+# Para reprodutibilidade, fixe em produção as versões das actions e do uv pelo SHA do commit.
+
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Padrão somente leitura. Cada job eleva só o que precisa.
+permissions:
+  contents: read
+
+# PRs antigos são cancelados. Na main, um deploy em andamento não é interrompido no meio.
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. Lint (ruff)
+  # -------------------------------------------------------------------------
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          # Fixe "version" para builds reprodutíveis. enable-cache acelera a instalação.
+          enable-cache: true
+
+      - name: Instalar dependências (uv.lock)
+        run: uv sync --locked --all-groups
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+  # -------------------------------------------------------------------------
+  # 2. Type check (mypy)
+  # -------------------------------------------------------------------------
+  tipos:
+    name: Type check (mypy)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Instalar dependências (uv.lock)
+        run: uv sync --locked --all-groups
+
+      - name: mypy
+        run: uv run mypy src
+
+  # -------------------------------------------------------------------------
+  # 3. Testes com Postgres e Redis reais (serviços do GitHub Actions)
+  # -------------------------------------------------------------------------
+  testes:
+    name: Testes (pytest)
+    needs: tipos
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: emporio
+          POSTGRES_USER: emporio
+          POSTGRES_PASSWORD: emporio
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U emporio -d emporio"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # Valores só para CI: a suíte usa adapters de teste e não chama provedores reais.
+      DATABASE_URL: postgresql+psycopg://emporio:emporio@localhost:5432/emporio
+      REDIS_URL: redis://localhost:6379/0
+      TENANTS_CONFIG: config/tenants.yaml
+      GOOGLE_API_KEY: ci-fake
+      GROQ_API_KEY: ci-fake
+      ANTHROPIC_API_KEY: ci-fake
+      JWT_SECRET: ci-somente-nao-usar-em-producao
+      LOG_LEVEL: WARNING
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Instalar dependências (uv.lock)
+        run: uv sync --locked --all-groups
+
+      - name: Aplicar migrações no banco de teste
+        # Para testes de integração que precisam do schema do tenant. Usa advisory lock como em produção.
+        run: uv run python -m emporio.adaptadores.db.migrar
+
+      - name: pytest
+        run: uv run pytest
+
+  # -------------------------------------------------------------------------
+  # 4. Build e push para o GHCR (só na main). Tag = SHA do commit.
+  # -------------------------------------------------------------------------
+  build:
+    name: Build e push (GHCR)
+    needs: testes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      imagem: ${{ steps.nome.outputs.imagem }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Nome da imagem em minúsculas (exigência do GHCR)
+        id: nome
+        run: echo "imagem=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Metadados (tag por SHA)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.nome.outputs.imagem }}
+          tags: |
+            type=raw,value=${{ github.sha }}
+
+      - name: Build e push (estágio runtime, cache de camadas no GitHub)
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # -------------------------------------------------------------------------
+  # 5. Scan de vulnerabilidades e de segredos na imagem (trivy)
+  # -------------------------------------------------------------------------
+  scan:
+    name: Scan (trivy)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: trivy (vulnerabilidades e segredos; falha em CRITICAL/HIGH com correção)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ needs.build.outputs.imagem }}@${{ needs.build.outputs.digest }}
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  # -------------------------------------------------------------------------
+  # 6. Deploy em produção (EXEMPLO). Aprovação manual pelo environment "producao".
+  # -------------------------------------------------------------------------
+  deploy:
+    name: Deploy produção (exemplo)
+    needs: [build, scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Aprovação: configure "Required reviewers" no environment "producao" (Settings > Environments).
+    environment:
+      name: producao
+      url: https://emporio.api.exemplo.com
+    permissions:
+      contents: read
+    env:
+      NAMESPACE: emporio
+      OVERLAY: deploy/k8s/overlays/producao
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+
+      - uses: imranismail/setup-kustomize@v2
+
+      - name: Configurar acesso ao cluster (kubeconfig do secret, nunca impresso)
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_PRODUCAO }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          printf '%s' "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Fixar a imagem pelo SHA
+        working-directory: ${{ env.OVERLAY }}
+        run: kustomize edit set image emporio=${{ needs.build.outputs.imagem }}:${{ github.sha }}
+
+      - name: Gerar manifestos
+        run: kustomize build "$OVERLAY" > "$RUNNER_TEMP/manifestos.yaml"
+
+      - name: Migração primeiro (Job isolado, antes do rollout)
+        run: |
+          # Job é imutável: remove a execução anterior e aplica só o Job.
+          yq 'select(.kind == "Job")' "$RUNNER_TEMP/manifestos.yaml" > "$RUNNER_TEMP/job.yaml"
+          kubectl -n "$NAMESPACE" delete job emporio-migracao --ignore-not-found
+          kubectl apply -f "$RUNNER_TEMP/job.yaml"
+          if ! kubectl -n "$NAMESPACE" wait --for=condition=complete job/emporio-migracao --timeout=10m; then
+            kubectl -n "$NAMESPACE" logs job/emporio-migracao --tail=200 || true
+            echo "::error::Migração falhou. Deploy abortado."
+            exit 1
+          fi
+
+      - name: Aplicar manifestos e aguardar rollout
+        run: |
+          kubectl apply -f "$RUNNER_TEMP/manifestos.yaml"
+          kubectl -n "$NAMESPACE" rollout status deployment/emporio-app --timeout=10m
+
+      - name: Verificar saúde após o deploy
+        run: |
+          kubectl -n "$NAMESPACE" get deployment emporio-app
+          kubectl -n "$NAMESPACE" get hpa emporio-app
