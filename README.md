@@ -2,7 +2,7 @@
 
 # Empório da Música: agente de atendimento Sônia
 
-> Processo: [board do projeto (3 epics, 9 stories, 29 tasks)](https://github.com/users/carlosbandelli/projects/4) · detalhes em [Como foi feito](#como-foi-feito-processo-e-board).
+> Processo: [board do projeto (3 epics, 9 stories, 29 tasks)](https://github.com/users/carlosbandelli/projects/4) · detalhes em [Como foi feito](#como-foi-feito-processo-e-board) · [diagramas da arquitetura](#arquitetura-em-diagramas).
 
 Agente de atendimento por texto da **Empório da Música**, loja fictícia de instrumentos musicais em Campo Grande/MS.
 A assistente se chama **Sônia**. Ela responde sobre preço, estoque, pedido, horário, endereço, parcelamento, devolução,
@@ -19,6 +19,90 @@ Docker Compose e CI) estão implementadas. Ficaram de fora o gateway real de pag
 Grafana, Sentry e a execução do workflow n8n num n8n real. Veja a seção 8.
 
 ---
+
+## Arquitetura em diagramas
+
+Os diagramas são em **Mermaid**, que o GitHub desenha direto na página (abra os links abaixo no próprio GitHub). Foram feitos à mão a partir do código, e cada caixa foi conferida contra um módulo, arquivo ou serviço que existe. A ideia inicial era gerá-los com o [archify](https://github.com/tt-a1i/archify), mas isso exigiria instalar e executar código de terceiros; a decisão foi usar Mermaid, sem instalar nada.
+
+Arquitetura em runtime (monólito modular no meio, hexagonal nas bordas; setas de dependência só para dentro, regras C1–C5):
+
+```mermaid
+flowchart TB
+    subgraph ENTRADA ["Entrada (adaptadores de entrada)"]
+        CLI["cli · typer<br/>chat · diagnostico · token"]
+        API["api · FastAPI<br/>/v1/chat · /v1/tools · /v1/admin<br/>/health · /ready · /metrics"]
+    end
+
+    COMP["composicao.py<br/>montar(settings) -> Aplicacao<br/>único lugar que liga porta a adaptador"]
+    CONF["configuracao<br/>Settings (.env) · tenants.yaml · manual de políticas"]
+
+    subgraph MOTORES ["adaptadores/motor (escolhido por MOTOR_ATENDIMENTO)"]
+        NAT["motor/nativo<br/>AgenteNativo · Roteador"]
+        N8N["motor/n8n<br/>AgenteN8n (webhook)"]
+        MCOM["motor/comum<br/>guarda de valores · prompt CAG · mensagens fixas · idioma · histórico"]
+    end
+
+    subgraph SAIDA ["adaptadores de saída (trocáveis)"]
+        LLM["llm<br/>ProvedorGroq · ProvedorGemini · ProvedorClaude<br/>ProvedorResiliente · LLMFalso"]
+        CSV["csv (modo local)<br/>CatalogoCsv · ClientesCsv · PedidosCsv · SolicitacoesJsonl"]
+        DB["db (Postgres, schema por tenant)<br/>CatalogoPostgres · PedidosPostgres · ClientesPostgres · SolicitacoesPostgres · migrar"]
+        REDIS["redis<br/>SessaoStoreRedis · RateLimiterRedis · CatalogoComCache"]
+        MEM["memoria<br/>SessaoStoreMemoria · RateLimiterMemoria · CircuitoStoreMemoria"]
+        REL["relogio<br/>RelogioSistema"]
+        OBS["observabilidade<br/>TelemetriaReal · FormatadorJson · logs com scrubbing de PII"]
+        IDN["identidade<br/>JwtLocal"]
+        PAG["pagamento<br/>FakeGatewayPagamento (sem tool que o use ainda)"]
+    end
+
+    subgraph MODULOS ["modulos (monólito modular, Python puro, sem I/O nem SDK)"]
+        ATE["atendimento<br/>FerramentasLoja · registrar_solicitacao"]
+        CAT["catalogo<br/>buscar_produtos · detalhar_produto"]
+        COM["comercial<br/>simular_pagamento · PrecoVigente · Parcelamento"]
+        PED["pedidos<br/>consultar_pedido"]
+        POL["politicas<br/>status_loja · HorarioLoja · Frete · JanelaDevolucao"]
+    end
+
+    COMUM["modulos.comum (shared kernel)<br/>Dinheiro · Montante"]
+
+    subgraph PORTAS ["portas (Protocol e tipos compartilhados)"]
+        PMOT["MotorDeAtendimento · Diagnostico"]
+        PFER["FachadaTools"]
+        PLLM["LLMProvider"]
+        PREP["Catalogo · Pedidos · Clientes · Solicitacoes"]
+        PEST["SessaoStore · RateLimiter · CircuitoStore"]
+        POUT["Relogio · Telemetria · ProvedorIdentidade · GatewayPagamento · ConfigTenants · TenantContext"]
+    end
+
+    ENTRADA --> COMP
+    ENTRADA --> PORTAS
+    COMP --> CONF
+    COMP -.->|"instancia e liga"| MOTORES
+    COMP -.->|"instancia e liga"| SAIDA
+
+    NAT --> MCOM
+    N8N --> MCOM
+    MOTORES --> MODULOS
+    MOTORES --> PORTAS
+    SAIDA --> MODULOS
+    SAIDA --> PORTAS
+
+    ATE --> CAT
+    ATE --> COM
+    ATE --> PED
+    ATE --> POL
+    CAT --> COM
+    COM --> POL
+    PED --> POL
+    MODULOS --> COMUM
+    MODULOS --> PORTAS
+```
+
+| Diagrama | O que mostra |
+|---|---|
+| [01 · Arquitetura](docs/diagramas/01-arquitetura.md) | Camadas, portas e adapters, composition root e as regras C1–C5 do import-linter (o diagrama acima, com legenda). |
+| [02 · Sequência de uma mensagem](docs/diagramas/02-sequencia-mensagem.md) | CLI/API → motor → rate limit e sessão → roteador → LLM com circuito, retry e fallback → tools → guarda de valores → resposta; tabela de degradação. |
+| [03 · Modelo de dados (ERD)](docs/diagramas/03-erd.md) | Tabelas do schema de cada tenant no Postgres e suas relações. |
+| [04 · Deploy e CI](docs/diagramas/04-deploy.md) | Traefik → 3 réplicas → Postgres/Redis, migração, Prometheus, n8n opcional; pipeline lint → mypy → testes → build no GHCR. |
 
 ## 1. Como rodar em 5 minutos
 
@@ -194,7 +278,7 @@ tests/            unitários, contrato (I1 a I8 e pagamento) e ponta a ponta (e2
 
 ### Diagramas
 
-Diagramas em Mermaid, em [docs/diagramas/](docs/diagramas/README.md):
+Diagramas em Mermaid, em [docs/diagramas/](docs/diagramas/README.md) (visão geral na seção [Arquitetura em diagramas](#arquitetura-em-diagramas)):
 
 - [01-arquitetura.md](docs/diagramas/01-arquitetura.md): componentes e camadas.
 - [02-sequencia-mensagem.md](docs/diagramas/02-sequencia-mensagem.md): o caminho de uma mensagem.

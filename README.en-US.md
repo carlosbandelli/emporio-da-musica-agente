@@ -2,7 +2,7 @@
 
 # Empório da Música: Sônia, the customer service agent
 
-> Process: [project board (3 epics, 9 stories, 29 tasks)](https://github.com/users/carlosbandelli/projects/4) · details in [How it was built](#how-it-was-built-process-and-board).
+> Process: [project board (3 epics, 9 stories, 29 tasks)](https://github.com/users/carlosbandelli/projects/4) · details in [How it was built](#how-it-was-built-process-and-board) · [architecture diagrams](#architecture-in-diagrams).
 
 Text-based customer service agent for **Empório da Música**, a fictional musical instrument store in Campo Grande/MS,
 Brazil. The assistant is called **Sônia**. She answers questions about price, stock, orders, opening hours, address,
@@ -20,6 +20,90 @@ Docker Compose and CI) are implemented. Left out: a real payment gateway (only t
 Grafana, Sentry, and running the n8n workflow on a real n8n. See section 8.
 
 ---
+
+## Architecture in diagrams
+
+The diagrams are in **Mermaid**, which GitHub draws directly on the page (open the links below on GitHub itself). They were written by hand from the code, and every box was checked against a module, file or service that exists. The initial idea was to generate them with [archify](https://github.com/tt-a1i/archify), but that would require installing and running third-party code; the decision was to use Mermaid and install nothing.
+
+Runtime architecture (modular monolith in the middle, hexagonal at the edges; dependency arrows only point inward, rules C1–C5; labels are in Portuguese, as in the code):
+
+```mermaid
+flowchart TB
+    subgraph ENTRADA ["Entrada (adaptadores de entrada)"]
+        CLI["cli · typer<br/>chat · diagnostico · token"]
+        API["api · FastAPI<br/>/v1/chat · /v1/tools · /v1/admin<br/>/health · /ready · /metrics"]
+    end
+
+    COMP["composicao.py<br/>montar(settings) -> Aplicacao<br/>único lugar que liga porta a adaptador"]
+    CONF["configuracao<br/>Settings (.env) · tenants.yaml · manual de políticas"]
+
+    subgraph MOTORES ["adaptadores/motor (escolhido por MOTOR_ATENDIMENTO)"]
+        NAT["motor/nativo<br/>AgenteNativo · Roteador"]
+        N8N["motor/n8n<br/>AgenteN8n (webhook)"]
+        MCOM["motor/comum<br/>guarda de valores · prompt CAG · mensagens fixas · idioma · histórico"]
+    end
+
+    subgraph SAIDA ["adaptadores de saída (trocáveis)"]
+        LLM["llm<br/>ProvedorGroq · ProvedorGemini · ProvedorClaude<br/>ProvedorResiliente · LLMFalso"]
+        CSV["csv (modo local)<br/>CatalogoCsv · ClientesCsv · PedidosCsv · SolicitacoesJsonl"]
+        DB["db (Postgres, schema por tenant)<br/>CatalogoPostgres · PedidosPostgres · ClientesPostgres · SolicitacoesPostgres · migrar"]
+        REDIS["redis<br/>SessaoStoreRedis · RateLimiterRedis · CatalogoComCache"]
+        MEM["memoria<br/>SessaoStoreMemoria · RateLimiterMemoria · CircuitoStoreMemoria"]
+        REL["relogio<br/>RelogioSistema"]
+        OBS["observabilidade<br/>TelemetriaReal · FormatadorJson · logs com scrubbing de PII"]
+        IDN["identidade<br/>JwtLocal"]
+        PAG["pagamento<br/>FakeGatewayPagamento (sem tool que o use ainda)"]
+    end
+
+    subgraph MODULOS ["modulos (monólito modular, Python puro, sem I/O nem SDK)"]
+        ATE["atendimento<br/>FerramentasLoja · registrar_solicitacao"]
+        CAT["catalogo<br/>buscar_produtos · detalhar_produto"]
+        COM["comercial<br/>simular_pagamento · PrecoVigente · Parcelamento"]
+        PED["pedidos<br/>consultar_pedido"]
+        POL["politicas<br/>status_loja · HorarioLoja · Frete · JanelaDevolucao"]
+    end
+
+    COMUM["modulos.comum (shared kernel)<br/>Dinheiro · Montante"]
+
+    subgraph PORTAS ["portas (Protocol e tipos compartilhados)"]
+        PMOT["MotorDeAtendimento · Diagnostico"]
+        PFER["FachadaTools"]
+        PLLM["LLMProvider"]
+        PREP["Catalogo · Pedidos · Clientes · Solicitacoes"]
+        PEST["SessaoStore · RateLimiter · CircuitoStore"]
+        POUT["Relogio · Telemetria · ProvedorIdentidade · GatewayPagamento · ConfigTenants · TenantContext"]
+    end
+
+    ENTRADA --> COMP
+    ENTRADA --> PORTAS
+    COMP --> CONF
+    COMP -.->|"instancia e liga"| MOTORES
+    COMP -.->|"instancia e liga"| SAIDA
+
+    NAT --> MCOM
+    N8N --> MCOM
+    MOTORES --> MODULOS
+    MOTORES --> PORTAS
+    SAIDA --> MODULOS
+    SAIDA --> PORTAS
+
+    ATE --> CAT
+    ATE --> COM
+    ATE --> PED
+    ATE --> POL
+    CAT --> COM
+    COM --> POL
+    PED --> POL
+    MODULOS --> COMUM
+    MODULOS --> PORTAS
+```
+
+| Diagram | What it shows |
+|---|---|
+| [01 · Architecture](docs/diagramas/01-arquitetura.md) | Layers, ports and adapters, composition root and the import-linter rules C1–C5 (the diagram above, with a legend). |
+| [02 · Sequence of one message](docs/diagramas/02-sequencia-mensagem.md) | CLI/API → engine → rate limit and session → router → LLM with circuit breaker, retry and fallback → tools → value guard → reply; degradation table. |
+| [03 · Data model (ERD)](docs/diagramas/03-erd.md) | Tables of each tenant's Postgres schema and their relations. |
+| [04 · Deploy and CI](docs/diagramas/04-deploy.md) | Traefik → 3 replicas → Postgres/Redis, migration, Prometheus, optional n8n; pipeline lint → mypy → tests → build on GHCR. |
 
 ## 1. Run it in 5 minutes
 
@@ -196,7 +280,7 @@ tests/            unit, contract (I1 to I8 and payment) and end-to-end (e2e) tes
 
 ### Diagrams
 
-Mermaid diagrams, in [docs/diagramas/](docs/diagramas/README.md) (in Portuguese):
+Mermaid diagrams, in [docs/diagramas/](docs/diagramas/README.md) (in Portuguese; overview in [Architecture in diagrams](#architecture-in-diagrams)):
 
 - [01-arquitetura.md](docs/diagramas/01-arquitetura.md): components and layers.
 - [02-sequencia-mensagem.md](docs/diagramas/02-sequencia-mensagem.md): the path of one message.
