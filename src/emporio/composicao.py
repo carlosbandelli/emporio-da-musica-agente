@@ -22,6 +22,7 @@ from emporio.adaptadores.memoria import CircuitoStoreMemoria, RateLimiterMemoria
 from emporio.adaptadores.motor.nativo import AgenteNativo
 from emporio.adaptadores.motor.nativo.prompt import carregar_politicas
 from emporio.adaptadores.motor.nativo.roteador import Roteador
+from emporio.adaptadores.redis import criar_estado_redis
 from emporio.adaptadores.relogio import RelogioSistema
 from emporio.configuracao import ErroConfiguracao, Settings, carregar_tenants, obter_tenant
 from emporio.modulos.atendimento.aplicacao import FerramentasLoja, ServicoAtendimento
@@ -29,7 +30,16 @@ from emporio.modulos.catalogo.aplicacao import ServicoCatalogo
 from emporio.modulos.comercial.aplicacao import ServicoComercial
 from emporio.modulos.pedidos.aplicacao import ServicoPedidos
 from emporio.modulos.politicas.aplicacao import ServicoPoliticas
-from emporio.portas import DiagnosticoInfo, LLMProvider, MotorDeAtendimento, Relogio, TenantContext
+from emporio.portas import (
+    Catalogo,
+    DiagnosticoInfo,
+    LLMProvider,
+    MotorDeAtendimento,
+    RateLimiter,
+    Relogio,
+    SessaoStore,
+    TenantContext,
+)
 from emporio.portas.tenant import ConfigTenant
 
 MOTORES_DISPONIVEIS: Final = ("nativo",)
@@ -137,15 +147,29 @@ def montar(
             "`emporio diagnostico` para conferir."
         )
 
+    # Estado: Redis quando REDIS_URL existe (Fase 2, fail-open); senão memória do processo (modo local, premissa #21).
+    sessoes: SessaoStore
+    limitador: RateLimiter
+    envolver_catalogo: Callable[[Catalogo], Catalogo] | None = None
+    if settings.redis_url is not None:
+        estado = criar_estado_redis(settings, tenants)
+        sessoes, limitador, envolver_catalogo = estado.sessoes, estado.limitador, estado.cache_catalogo
+    else:
+        sessoes, limitador = SessaoStoreMemoria(), RateLimiterMemoria(tenants)
+
     motor = AgenteNativo(
         tenants=tenants,
         politicas=politicas,
         roteador=Roteador(provedores, relogio_monotonic=relogio_monotonic),
         ferramentas=montar_ferramentas(
-            tenants, raiz=base, relogio=relogio_app, dir_estado=dir_estado if dir_estado is not None else base / "var"
+            tenants,
+            raiz=base,
+            relogio=relogio_app,
+            dir_estado=dir_estado if dir_estado is not None else base / "var",
+            envolver_catalogo=envolver_catalogo,
         ),
-        sessoes=SessaoStoreMemoria(),
-        limitador=RateLimiterMemoria(tenants),
+        sessoes=sessoes,
+        limitador=limitador,
         relogio=relogio_app,
         relogio_monotonic=relogio_monotonic,
     )
@@ -160,14 +184,24 @@ def montar(
 
 
 def montar_ferramentas(
-    tenants: Mapping[str, ConfigTenant], *, raiz: Path, relogio: Relogio, dir_estado: Path
+    tenants: Mapping[str, ConfigTenant],
+    *,
+    raiz: Path,
+    relogio: Relogio,
+    dir_estado: Path,
+    envolver_catalogo: Callable[[Catalogo], Catalogo] | None = None,
 ) -> FerramentasLoja:
-    """Casos de uso sobre os CSVs do tenant + solicitações em JSONL, reunidos na fachada de tools."""
+    """Casos de uso sobre os CSVs do tenant + solicitações em JSONL, reunidos na fachada de tools.
+
+    `envolver_catalogo`: decorador opcional do catálogo (ex.: cache-aside no Redis, que nunca guarda estoque).
+    """
 
     def resolver_config(tenant_id: str) -> ConfigTenant:
         return obter_tenant(tenants, tenant_id)
 
-    catalogo = CatalogoCsv(tenants, raiz)
+    catalogo: Catalogo = CatalogoCsv(tenants, raiz)
+    if envolver_catalogo is not None:
+        catalogo = envolver_catalogo(catalogo)
     politicas = ServicoPoliticas(relogio, resolver_config)
     return FerramentasLoja(
         catalogo=ServicoCatalogo(catalogo, resolver_config),

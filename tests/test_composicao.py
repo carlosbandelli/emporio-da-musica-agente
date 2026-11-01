@@ -91,3 +91,17 @@ async def test_montar_com_llm_falso_responde_com_os_dados_reais(tmp_path: Path) 
     assert app.provedores == ("falso",)
     r = await app.motor.responder(TenantContext("emporio"), "s1", MensagemCliente("quanto custa o Takamine GD20?"))
     assert r.degradada is False and "R$ 2.199,00" in r.texto and r.tools_chamadas == ("detalhar_produto",)
+
+
+async def test_redis_fora_do_ar_nao_derruba_o_chat(tmp_path: Path) -> None:
+    """Com REDIS_URL apontando para um Redis inexistente, o chat segue (fail-open: sem histórico, limite local)."""
+    falso = LLMFalso([RespostaLLM("Olá! Como posso ajudar?", "", "")])
+    app = montar(
+        settings(redis_url="redis://127.0.0.1:1/0"),
+        provedores={"falso": falso},
+        relogio=RelogioFixo(datetime(2026, 3, 10, 15, tzinfo=UTC)),
+        raiz=RAIZ,
+        dir_estado=tmp_path,
+    )
+    r = await app.motor.responder(TenantContext("emporio"), "s1", MensagemCliente("oi"))
+    assert r.degradada is False and r.texto == "Olá! Como posso ajudar?"
