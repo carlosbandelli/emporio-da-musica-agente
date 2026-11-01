@@ -136,6 +136,39 @@ deadline da requisição → bulkhead → timeout → retry (backoff exponencial
   pagamento usam idempotency key.
 - Lib: `tenacity` para retry/backoff/jitter; circuit breaker e bulkhead implementados no próprio adapter.
 
+#### Valores iniciais (configuráveis; calibrar com as métricas do Grafana)
+
+**LLMs**
+
+| Parâmetro | Valor |
+|---|---|
+| Deadline total por mensagem do cliente | 30 s |
+| Timeout do classificador (Groq) | 5 s |
+| Timeout por nível | simples (Groq) 10 s · média (Gemini) 15 s · complexa (Claude) 25 s |
+| Tentativas | no máximo 3 (1 + 2 retries) |
+| Backoff + full jitter | base 0,5 s, ×2, teto 4 s → 1º retry `U(0; 0,5 s)`, 2º retry `U(0; 1 s)` — `wait_random_exponential(multiplier=0.5, max=4)` |
+| `Retry-After` | respeitado se ≤ 5 s **e** couber no deadline; senão, fallback imediato |
+| Orçamento | só tenta de novo se o tempo restante do deadline ≥ timeout da chamada |
+
+**Circuit breaker (por provedor)**
+
+| Parâmetro | Valor |
+|---|---|
+| Abre após | 5 falhas transitórias seguidas **ou** ≥ 50% de falhas em janela de 30 s (mínimo 10 chamadas) |
+| Erro de autenticação (`401`/`403`) | abre imediatamente |
+| Tempo aberto | 30 s (transitório) · 10 min (autenticação) |
+| Meio-aberto | 1 chamada de teste: sucesso fecha, falha reabre |
+
+**Bulkhead (chamadas simultâneas por pod)**: Groq 10 · Gemini 10 · Claude 5.
+
+**Demais dependências**
+
+| Dependência | Timeout | Retry | Se cair |
+|---|---|---|---|
+| Postgres | 2 s | 2 tentativas, base 0,1 s, teto 0,5 s (só leituras/erros de conexão) | erro amigável ao cliente |
+| Redis | 300 ms | 1 tentativa | rate limit **fail-open** com bucket local de emergência; sessão degradada (conversa segue sem histórico) |
+| Gateway de pagamento | 10 s | 3 tentativas, base 1 s, teto 8 s (só operações idempotentes) | encaminha para a equipe (sem trocar de gateway) |
+
 ### 5.3 Redis — o que guarda e por quê
 
 O Redis guarda o que precisa ser **compartilhado entre réplicas**:
@@ -258,6 +291,35 @@ A primeira seção do README é "Como rodar em 5 minutos", com comandos para Win
 - Nenhuma chave nossa vai para o repositório. Opcional: chave com limite de gasto enviada no e-mail de entrega,
   fora do repositório.
 - Critério de aceite do núcleo: um clone limpo, seguindo só o README, conversa com o agente no caminho 1.
+
+### 9.2 Persona: Sônia
+
+A assistente virtual se chama **Sônia** (nome comum no Brasil, com eco de "som"). Base no manual: §7.1 ("informal mas
+profissional, como um amigo que entende de música, evitar linguagem robotizada") e §7.2 ("clara e objetiva").
+Resumo: **simpática e direta ao ponto**.
+
+| Regra | Na prática |
+|---|---|
+| Resposta primeiro | perguntou preço → o preço vem na primeira frase |
+| Curta | 2 a 5 frases; listas só para comparar produtos |
+| Calorosa sem enrolar | chama pelo nome quando sabe; nada de "Prezado cliente" |
+| Entende de música | explica rapidamente (ex.: nylon × aço para iniciante) quando ajuda |
+| Emoji com moderação | no máximo 1; nenhum em reclamação |
+| Tom em reclamação | menos descontraída, mais empática e resolutiva |
+| Honesta | "não tenho essa informação" + encaminha; nunca inventa |
+| Fechamento (§7.2) | pergunta se pode ajudar em algo mais só ao fim do assunto |
+| Inglês | mesmo tom: friendly and straight to the point |
+| Identidade | se apresenta como assistente virtual da loja (não finge ser humana) |
+
+Exemplo:
+> ❌ Robótico: "Prezado cliente, informamos que o produto Takamine GD20 Dreadnought Natural encontra-se disponível pelo
+> valor de R$ 2.199,00. Permanecemos à disposição."
+> ❌ Informal demais: "Opaaa, meu consagrado!!! 🎸🔥 Esse violão é TOP demais, cara!!!"
+> ✅ Sônia: "O Takamine GD20 sai por **R$ 2.199,00** e tem em estoque! No PIX fica R$ 2.089,05 (5% off), ou em até 12x
+> de R$ 183,25 sem juros. É um dreadnought com tampo sólido de cedro, ótimo pra dedilhado. Quer comparar com outro
+> modelo?"
+
+(Valores do exemplo são ilustrativos; na conversa real vêm sempre das tools.)
 
 ## 10. Idiomas do atendimento (pt-BR / en-US)
 
