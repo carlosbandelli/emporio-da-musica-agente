@@ -43,7 +43,7 @@ Isso permite expô-las para qualquer outro orquestrador (ver §3.1).
   Python simples, sem abstrações desnecessárias. Trocar LLM, banco, observabilidade ou o próprio motor do agente muda
   só o adapter — os módulos do monólito não são tocados.
 
-| Porta (saída) | Adapters |
+| Porta | Adapters |
 |---|---|
 | `MotorDeAtendimento` | `AgenteNativo` (loop Python: roteador + LLMs + tools); `AgenteN8n` (webhook do n8n, evolução) |
 | `LLMProvider` | Groq, Gemini, Claude |
@@ -76,6 +76,92 @@ API → rate limit → RBAC → tenant → MotorDeAtendimento.responder(tenant, 
 - **Regra**: nenhuma regra de negócio é reescrita dentro de fluxos do n8n — isso duplicaria lógica e quebraria a
   arquitetura.
 
+### 3.2 Contrato da porta `MotorDeAtendimento`
+
+É a única porta que os adapters de entrada usam para conversar. O contrato fica em `portas/`; os motores, em
+`adaptadores/motor/`.
+
+```python
+async def responder(ctx: TenantContext, sessao_id: str, mensagem: MensagemCliente) -> RespostaAtendimento
+```
+
+`RespostaAtendimento`: `texto`, `idioma`, `nivel | None` (`None` se nenhum LLM foi chamado ou o motor não usa o
+roteador), `provedor | None`, `tools_chamadas: list[str]`, `degradada: bool` (resposta veio do catálogo de mensagens
+fixas por falha ou limite).
+
+Invariantes que **todo** motor cumpre:
+
+| # | Invariante |
+|---|---|
+| I1 | Texto não vazio para qualquer mensagem válida. Mensagem vazia ou acima do limite do tenant → mensagem fixa, sem chamar LLM. |
+| I2 | Histórico: a 2ª mensagem da mesma sessão enxerga a 1ª (via `SessaoStore`). |
+| I3 | Isolamento: o mesmo `sessao_id` em tenants diferentes não compartilha histórico nem configuração. |
+| I4 | Nunca lança exceção por falha de LLM ou backend: devolve a mensagem fixa traduzida com `degradada=True`. |
+| I5 | Respeita o deadline do tenant (padrão 30 s, §5.2); estourou → mensagem fixa, `degradada=True`. |
+| I6 | Preço, estoque e status de pedido só aparecem no texto se a tool correspondente foi chamada (espião na fachada de tools). |
+| I7 | Responde no idioma da sessão (pt-BR/en-US, §10). |
+| I8 | Sem estado global: duas instâncias com tenants diferentes em `asyncio.gather` não se contaminam. |
+
+A suíte de contrato fica em `tests/contrato/test_motor_atendimento.py`, parametrizada pelos motores registrados e
+com LLM simulado (sem rede, sem chave). Qualquer motor futuro (ex.: `AgenteN8n`) só entra no registro de
+`MOTOR_ATENDIMENTO` se passar nela; `tests/contrato/README.md` explica como incluí-lo.
+
+### 3.3 Composition root e estrutura de pastas
+
+- **Monólito modular** = `modulos/`: um pacote por contexto (§3), Python simples, sem I/O nem SDK. Cada módulo tem
+  `dominio.py` (regras e value objects) e `aplicacao.py` (casos de uso = tools; é a API pública do módulo).
+  `modulos/comum` é o shared kernel (`Dinheiro` e tipos simples usados por todos).
+- **Hexagonal** = `portas/` (contratos `Protocol` e tipos compartilhados, como `TenantContext`) + `adaptadores/`
+  (implementações trocáveis, de entrada e de saída). Só o que é externo ganha porta.
+- **Composition root**: `emporio.composicao.montar(settings) -> Aplicacao` é o único lugar que instancia adapters e
+  liga porta ↔ adapter. Só ali se leem `Settings` (`.env`) e `config/`.
+- **Proibido** em `src/`: singletons de módulo, `global`, cache ou estado em variável de módulo (constantes imutáveis
+  são permitidas). O estado por pod previsto na §5 (cache L1 de config/manual, single-flight, circuito, bulkhead) é
+  atributo de objetos criados em `montar()`.
+- A CLI e o `POST /v1/chat` recebem só `MotorDeAtendimento` (e `Diagnostico`), nunca LLMs, repositórios ou tools.
+  Entradas da Fase 2 que precisam de mais (`/v1/tools/*` e MCP, admin) recebem a porta correspondente (fachada de
+  tools, `Solicitacoes`, `ProvedorIdentidade`), também injetada por `montar()`.
+- **Seleção do motor** por `MOTOR_ATENDIMENTO` (`nativo`, padrão; `n8n` na Fase 2). Valor desconhecido → erro de
+  configuração na inicialização, não na primeira mensagem.
+
+```
+src/emporio/
+├── modulos/                  ← MONÓLITO MODULAR (Python simples, sem I/O nem SDK)
+│   ├── comum/                shared kernel: Dinheiro e tipos simples usados por todos os módulos
+│   ├── catalogo/             Produto, Categoria → buscar_produtos, detalhar_produto
+│   ├── comercial/            PrecoVigente, Parcelamento, PlanoPagamento → simular_pagamento
+│   ├── pedidos/              Pedido, StatusPedido → consultar_pedido (com verificação)
+│   ├── politicas/            HorarioLoja, Frete, JanelaDevolucao → status_loja
+│   └── atendimento/          Solicitacao → registrar_solicitacao
+│       (cada módulo: dominio.py = regras; aplicacao.py = casos de uso/tools, API pública do módulo)
+├── portas/                   ← HEXAGONAL: contratos (Protocol) e tipos compartilhados (TenantContext)
+├── adaptadores/              ← HEXAGONAL: implementações trocáveis
+│   ├── cli/                  entrada (Fase 1)        · api/ entrada (Fase 2)
+│   ├── motor/nativo/         AgenteNativo: roteador + prompt CAG + loop de tools
+│   ├── motor/n8n/            AgenteN8n (Fase 2)
+│   ├── llm/                  groq, gemini, claude, falso
+│   ├── csv/, memoria/        dados e estado (Fase 1)
+│   └── db/, redis/           Postgres e Redis (Fase 2)
+└── composicao.py             ← único ponto que liga porta ↔ adapter (lê Settings/.env e MOTOR_ATENDIMENTO)
+config/                       ← na raiz do repositório (o Dockerfile copia /app/config): tenants.yaml, tenants/<id>/politicas.md
+```
+
+Regras de dependência (só para dentro), verificadas pelo **import-linter** (`[tool.importlinter]` no
+`pyproject.toml`; `uv run lint-imports` no gate de qualidade e no CI):
+
+- **C1** camadas (de fora para dentro): `composicao` → `adaptadores` → `modulos.*.aplicacao` → `portas` →
+  `modulos.*.dominio` (+ `modulos.comum`). Os casos de uso dependem das portas; as portas podem usar tipos do domínio;
+  o domínio não importa nada do projeto além de `modulos.comum`. Nenhuma camada importa uma camada de fora.
+- **C2** `emporio.modulos` não importa `emporio.adaptadores`, `emporio.composicao` nem SDKs externos (`groq`,
+  `google.genai`, `anthropic`, `httpx`, `sqlalchemy`, `redis`, `fastapi`, `typer`).
+- **C3** entre módulos: um módulo só importa o `aplicacao` de outro, nunca o `dominio`; `modulos.comum` é permitido
+  para todos.
+- **C4** adaptadores de entrada (`cli`, `api`) só importam `portas` e `composicao`; nunca `modulos`, `llm`, `csv`,
+  `db`, `motor`.
+- **C5** adaptadores independentes entre si: `motor.nativo` não importa `llm.claude`, só a porta `LLMProvider`.
+
+Consequência: a Fase 2 inteira é "novo adapter + uma linha em `composicao.py`"; `modulos/` não muda.
+
 ## 4. Multi-tenancy — schema por tenant (modelo 02)
 
 - Um banco Postgres; **um schema por loja** (`emporio`, ...). Tabelas idênticas em cada schema.
@@ -90,7 +176,8 @@ API → rate limit → RBAC → tenant → MotorDeAtendimento.responder(tenant, 
 
 ## 5. Escalabilidade e resiliência
 
-- **Stateless**: nenhum estado de negócio em memória do processo; sessão e rate limit no Redis.
+- **Stateless**: nenhum estado de negócio em memória do processo; sessão e rate limit no Redis (no modo local,
+  em memória por processo — premissa #21).
 - **Horizontal**: N réplicas atrás do Traefik; K8s `Deployment` + **HPA**. Sem sticky sessions.
 - **Vertical**: requests/limits de CPU/memória configuráveis; **VPA** de exemplo.
 - **Single-flight**: carregamento de config/manual por tenant uma vez por pod, mesmo com requisições concorrentes.
@@ -272,7 +359,8 @@ Cuidados:
 - **API FastAPI**: `POST /v1/chat` (`session_id`, mensagem; tenant pelo subdomínio/header), endpoints admin,
   `/v1/tools/*`, `/health`, `/ready`, `/metrics` (interno).
 - **CLI** (`uv run emporio ...`, entry point de `emporio.adaptadores.cli`) com dois modos:
-  - **local (padrão)**: chama o núcleo **no mesmo processo**, sem API no ar — CSVs + adapters em memória;
+  - **local (padrão)**: chama o núcleo **no mesmo processo** (via `composicao.montar()` e a porta
+    `MotorDeAtendimento`, §3.3), sem API no ar — CSVs + adapters em memória;
   - **remoto** (`--api URL`): consome a API (usado com o docker-compose).
 - Comandos: `chat`, `diagnostico` (chaves encontradas, modo ativo, dados carregados), `token` (gera JWT de teste).
 
