@@ -75,7 +75,12 @@ def criar_engine(url: str, *, com_timeout: bool = True) -> Engine:
         max_overflow=5,
         pool_timeout=TIMEOUT_S,
         pool_pre_ping=True,
-        connect_args={"connect_timeout": TIMEOUT_S, "options": f"-c statement_timeout={TIMEOUT_S * 1000}"},
+        # search_path=pg_catalog na conexão: sem o set_config do tenant nenhuma tabela de loja é visível, mesmo quando o
+        # usuário do banco tem o nome de um schema (o padrão "$user", public resolveria para ele).
+        connect_args={
+            "connect_timeout": TIMEOUT_S,
+            "options": f"-c statement_timeout={TIMEOUT_S * 1000} -c search_path=pg_catalog",
+        },
     )
 
 

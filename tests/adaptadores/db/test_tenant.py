@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import OperationalError
 
@@ -17,6 +17,7 @@ from emporio.adaptadores.db import (
     PedidosPostgres,
     SolicitacoesPostgres,
 )
+from emporio.adaptadores.db._acesso import criar_engine
 from emporio.adaptadores.db.migrar import migrar
 from emporio.portas import FiltroProdutos, TenantContext
 from emporio.portas.tenant import ConfigTenant
@@ -120,9 +121,13 @@ def test_todo_metodo_publico_exige_ctx_primeiro() -> None:
 
 
 def test_conexao_sem_tenant_nao_enxerga_tabelas(banco: URL, dois_tenants: Mapping[str, ConfigTenant]) -> None:
-    """Sem `search_path` do tenant as tabelas não existem: o schema `public` fica vazio."""
+    """Sem `search_path` do tenant as tabelas não existem: o schema `public` fica vazio.
+
+    Usa o engine da aplicação: mesmo que o usuário do banco tenha o nome de um schema (`"$user"` no search_path
+    padrão do Postgres), a conexão começa com `search_path=pg_catalog`.
+    """
     migrar(SecretStr(texto_url(banco)), dois_tenants, RAIZ)
-    engine = create_engine(banco)
+    engine = criar_engine(texto_url(banco))
     with engine.connect() as c:
         assert c.execute(text("SELECT to_regclass('produtos')")).scalar_one() is None
         assert c.execute(text("SELECT to_regclass('emporio.produtos')")).scalar_one() is not None

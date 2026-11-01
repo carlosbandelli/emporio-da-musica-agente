@@ -142,5 +142,8 @@ def test_diagnostico_tenant_invalido_nao_quebra() -> None:
 def test_versao_e_ajuda() -> None:
     app = criar_app()
     assert CliRunner().invoke(app, ["versao"]).exit_code == 0
-    r = CliRunner().invoke(app, ["chat", "--help"])
+    # Sem cores: no CI (GITHUB_ACTIONS) o rich força ANSI e os códigos quebram a busca por "--gravar".
+    r = CliRunner(env={"NO_COLOR": "1", "TERM": "dumb", "GITHUB_ACTIONS": "", "FORCE_COLOR": ""}).invoke(
+        app, ["chat", "--help"]
+    )
     assert r.exit_code == 0 and "--gravar" in r.output and "--idioma" in r.output and "--tenant" in r.output

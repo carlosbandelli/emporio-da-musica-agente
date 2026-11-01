@@ -86,20 +86,21 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_DB: emporio
-          POSTGRES_USER: emporio
-          POSTGRES_PASSWORD: emporio
+          # Usuário e senha diferentes de qualquer nome de schema/tenant (o teste confere que a senha não vaza na saída).
+          POSTGRES_DB: emporio_ci
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-senha-de-teste
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U emporio -d emporio"
+          --health-cmd "pg_isready -U ci -d emporio_ci"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
     env:
       # Postgres de serviço para os testes marcados "postgres" (cada teste cria o próprio banco).
       # Redis usa fakeredis/testcontainers e o LLM é simulado: nenhuma chave de provedor é necessária.
-      TEST_DATABASE_URL: postgresql+psycopg://emporio:emporio@localhost:5432/emporio
+      TEST_DATABASE_URL: postgresql+psycopg://ci:ci-senha-de-teste@localhost:5432/emporio_ci
       LOG_LEVEL: WARNING
     steps:
       - uses: actions/checkout@v4
