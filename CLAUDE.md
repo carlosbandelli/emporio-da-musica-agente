@@ -32,6 +32,13 @@ Once code, a dependency manifest and run/test commands exist, add them to this f
 - Secrets live in `.env` / `.mcp.json` (gitignored). Never print, copy or commit them. The Anthropic key expires
   around 2026-11-07: record Claude example conversations before that; without the key, the complex tier falls back
   to Gemini.
+- **code-review-graph**: update the graph (`build_or_update_graph_tool`) whenever a task closes a module/adapter and
+  at the end of every Story and Epic (hierarchy in `Plans.md`). Every code analysis (subagent delivery review,
+  `/code-review`, debugging, change impact, C1–C5 import rules) starts from the graph tools; read files only where the
+  graph points. Cite node/edge counts in the commit that closes a Story/Epic.
+- **archify** (https://github.com/tt-a1i/archify): agent skill (Node), not a Python dependency. Used at the end
+  (Plans task 3.0) to generate architecture/sequence/ERD/deploy diagrams into `docs/diagramas/`. Read its installer
+  before running it.
 - Planning/execution plugins: `/harness:harness-plan` then `/harness:harness-work <range>` (run in ranges, review
   between them).
 

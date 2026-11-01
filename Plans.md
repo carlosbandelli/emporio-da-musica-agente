@@ -14,6 +14,33 @@ Convenções:
 - Testes nunca chamam LLM real nem leem `.env`: usam `LLMFalso` (respostas roteirizadas) e `Settings` montado no teste.
 - **Linha de corte**: se a Fase 1 não estiver `cc:完了` até 2026-11-01 18:00, a Fase 2 é reduzida à 2.1 (API) e o resto vai para "Limitações e próximos passos".
 
+### Hierarquia Epic → Story → Task
+
+| Epic | Story | Tasks | Módulos/adapters que fecha |
+|---|---|---|---|
+| E1 Núcleo | S1.A Fundação | 1.0–1.2 | `portas/`, `composicao.py` (esqueleto) |
+| | S1.B Regras de negócio | 1.3–1.6 | `modulos/comercial`, `modulos/politicas`, `adaptadores/csv`, `adaptadores/memoria`, `modulos/{catalogo,pedidos,atendimento}` |
+| | S1.C Agente | 1.7–1.11 | `adaptadores/llm`, `adaptadores/motor/nativo` |
+| | S1.D Interface e entrega do núcleo | 1.12–1.16 | `adaptadores/cli` |
+| E2 Extras | S2.A API e segurança | 2.1, 2.5, 2.6 | `adaptadores/api` |
+| | S2.B Infra de dados | 2.2, 2.3 | `adaptadores/db`, `adaptadores/redis` |
+| | S2.C Observabilidade e deploy | 2.4, 2.8 | instrumentação |
+| | S2.D Motores e pagamento | 2.7, 2.9 | `adaptadores/motor/n8n`, gateway fake |
+| E3 Entrega | S3.A Diagramas, revisão e publicação | 3.0–3.2 | — |
+
+### code-review-graph (combinado com o usuário em 2026-11-01)
+
+- **Quando atualizar**: (a) ao concluir uma task que fecha um módulo ou adapter da tabela acima; (b) ao fechar cada Story;
+  (c) ao fechar cada Epic. Ferramenta: `build_or_update_graph_tool` (incremental). Em (b) e (c), também
+  `run_postprocess_tool` e `get_architecture_overview_tool`.
+- **Quando usar**: toda análise de código (revisão de entrega de subagente, `/code-review`, depuração, impacto de mudança,
+  conferência das regras C1–C5) começa pelo grafo: `get_minimal_context_tool` / `get_review_context_tool` para o diff,
+  `get_impact_radius_tool` antes de mexer em código compartilhado, `detect_changes_tool` ao revisar uma Story. Leitura
+  de arquivos só para os trechos que o grafo apontar.
+- **Evidência**: o commit que fecha a Story/Epic cita "grafo atualizado" com a contagem de nós e arestas
+  (`list_graph_stats_tool`); a revisão da Story registra os achados do grafo (ex.: dependência que viola C1–C5, hubs inesperados).
+- Os dados locais do grafo não vão para o repositório (`.gitignore`, task 1.0).
+
 ## Spec delta (aplicado na tarefa 1.1, antes do código)
 
 Destino: `docs/arquitetura.md` e `docs/premissas.md`.
@@ -76,7 +103,7 @@ Destino: `docs/arquitetura.md` e `docs/premissas.md`.
 
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
-| 1.0 | `[lane:gate]` `[tdd:skip:scaffold]` `@python-pro` **Esqueleto do projeto**: `pyproject.toml` (Python 3.12, src layout `src/emporio`, entry point `emporio = "emporio.adaptadores.cli:app"`), grupos `dev` (pytest, pytest-asyncio, ruff, mypy, import-linter), `uv.lock`, configs de ruff/mypy (strict em `src`), `tests/` com 1 smoke test, `.env.example` revisado (chaves vazias, `MOTOR_ATENDIMENTO=nativo`, `DATA_REFERENCIA=`). Pastas exatamente como a árvore do Spec delta §3.3 (Fase 1: `modulos/*`, `portas/`, `adaptadores/{cli,motor/nativo,llm,csv,memoria}`, `composicao.py`, `config/`), com `__init__.py`. Contratos C1–C5 do import-linter em `pyproject.toml` (`[tool.importlinter]`) e passo `uv run lint-imports` adicionado ao job de lint do `.github/workflows/ci-cd.yml`. `.gitignore` passa a ignorar `.claude/memory/`, `.claude/sessions/`, `.claude/state/` e `var/`. | `uv sync --locked` ok; ruff check + format --check ok; `mypy src` ok; `uv run lint-imports` com 5 contratos KEPT; prova de violação: um import proibido temporário (`modulos.comercial` → `adaptadores.llm`) faz `lint-imports` falhar (registrado no commit, depois revertido); `pytest` 1 passed; `uv run emporio --help` sai com 0; `git status` não mostra `.claude/state`; CLAUDE.md atualizado com os comandos e a árvore | - | cc:TODO |
+| 1.0 | `[lane:gate]` `[tdd:skip:scaffold]` `@python-pro` **Esqueleto do projeto**: `pyproject.toml` (Python 3.12, src layout `src/emporio`, entry point `emporio = "emporio.adaptadores.cli:app"`), grupos `dev` (pytest, pytest-asyncio, ruff, mypy, import-linter), `uv.lock`, configs de ruff/mypy (strict em `src`), `tests/` com 1 smoke test, `.env.example` revisado (chaves vazias, `MOTOR_ATENDIMENTO=nativo`, `DATA_REFERENCIA=`). Pastas exatamente como a árvore do Spec delta §3.3 (Fase 1: `modulos/*`, `portas/`, `adaptadores/{cli,motor/nativo,llm,csv,memoria}`, `composicao.py`, `config/`), com `__init__.py`. Contratos C1–C5 do import-linter em `pyproject.toml` (`[tool.importlinter]`) e passo `uv run lint-imports` adicionado ao job de lint do `.github/workflows/ci-cd.yml`. `.gitignore` passa a ignorar `.claude/memory/`, `.claude/sessions/`, `.claude/state/`, `var/` e a pasta local do code-review-graph (`.code-review-graph/`; confirmar o nome na primeira execução). Ao fim da task, primeiro `build_or_update_graph_tool`. | `uv sync --locked` ok; ruff check + format --check ok; `mypy src` ok; `uv run lint-imports` com 5 contratos KEPT; prova de violação: um import proibido temporário (`modulos.comercial` → `adaptadores.llm`) faz `lint-imports` falhar (registrado no commit, depois revertido); `pytest` 1 passed; `uv run emporio --help` sai com 0; `git status` não mostra `.claude/state`; CLAUDE.md atualizado com os comandos e a árvore | - | cc:TODO |
 | 1.1 | `[lane:gate]` `[tdd:skip:docs-contract]` `@architect-reviewer` **Aplicar o Spec delta** acima em `docs/arquitetura.md` e `docs/premissas.md`. | Seções §3.2, §3.3 (com a árvore e os contratos C1–C5) e premissas #19–#21 presentes; `git diff --check` limpo; nenhuma decisão anterior contradita | 1.0 | cc:TODO |
 | 1.2 | `[lane:gate]` `[tdd:required]` `@python-pro` **Portas, TenantContext e Settings**: `Protocol`s de `MotorDeAtendimento`, `LLMProvider`, `Catalogo`, `Pedidos`, `Clientes`, `Solicitacoes`, `SessaoStore`, `RateLimiter`, `EstadoCircuito`, `Relogio`; `TenantContext` imutável (tenant_id, idioma, papel); `Settings` (pydantic-settings, lê `.env` só na composição); `config/tenants.yaml` com o tenant `emporio` (persona Sônia, contatos das premissas #1–#2, idiomas, deadline, limites); loader com validação. | Testes: tenant inexistente → erro claro; yaml inválido → erro com o campo; `TenantContext` é frozen; grep sem `global ` em `src/`; gate ok | 1.0 | cc:TODO |
 | 1.3 | `[lane:gate]` `[tdd:required]` `@python-pro` **Domínio Comercial**: `Dinheiro` (centavos `int`, `ROUND_HALF_UP`, formatação por locale com `babel`), `PrecoVigente` (promoção ativa não acumula; PIX −5% só sobre preço de tabela), `Parcelamento` (≤3x mín. R$50; 4–6x mín. R$80; 7–12x mín. R$100; sobra na 1ª parcela, premissa #17), `PlanoPagamento` (combinação só acima de R$2.000). | Testes parametrizados cobrindo: PIX sem promo; promo + PIX (sem desconto extra); vários registros de promo (produtos 93/96/99, só `is_active=1`); R$1.000 em 3x = 333,34+333,33+333,33; limite exato de cada faixa; combinação em R$2.000,00 recusada e em R$2.000,01 aceita; `R$ 1.299,00` × `R$1,299.00`; cobertura ≥ 95% em `modulos/comercial` | 1.0 | cc:TODO |
@@ -112,7 +139,8 @@ Destino: `docs/arquitetura.md` e `docs/premissas.md`.
 
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
-| 3.1 | `[lane:release]` `[tdd:skip:release-prep]` `@claude` **Revisão final**: `/code-review high` na `main`, `security-review`, READMEs sincronizados com o que foi entregue (Fase 2 parcial vai para limitações), `.env`/`.mcp.json`/PDF do enunciado fora do histórico (`git log --all -- .env` vazio). | Achados críticos corrigidos ou documentados; varredura de segredos no histórico sem achados | 1.16 | cc:TODO |
+| 3.0 | `[lane:release]` `[tdd:skip:docs-diagrams]` `@documentation-engineer` **Diagramas com [archify](https://github.com/tt-a1i/archify)** (skill de agente, Node.js ≥ 18, Apache-2.0; ferramenta de documentação, **não** é dependência do `pyproject.toml`). Antes de instalar: ler o `llms.txt` e o `SKILL.md` do repositório e conferir o que o instalador executa; instalar com escopo de projeto, versão fixada. Insumo: `get_architecture_overview_tool` do code-review-graph + código. Gerar em `docs/diagramas/`: (1) arquitetura de runtime (monólito modular + portas/adapters, CLI/API → `MotorDeAtendimento`); (2) sequência de uma mensagem (CLI → motor → roteador → LLM → tools → resposta, com fallback); (3) ERD dos dados (CSV/schema `emporio`); (4) deploy (Traefik → réplicas → Postgres/Redis → observabilidade); exportar PNG de cada um. | 4 HTML autocontidos + 4 PNG em `docs/diagramas/`; cada componente desenhado existe no código ou no deploy (conferido pelo grafo, sem caixa inventada); diagrama 1 respeita C1–C5; os dois READMEs mostram os PNG e linkam os HTML; a skill não vai para o repositório (só os diagramas) | 1.16 (e 2.x concluídas) | cc:TODO |
+| 3.1 | `[lane:release]` `[tdd:skip:release-prep]` `@claude` **Revisão final**: grafo atualizado e `detect_changes_tool`/`get_review_context_tool` como ponto de partida, `/code-review high` na `main`, `security-review`, READMEs sincronizados com o que foi entregue (Fase 2 parcial vai para limitações), `.env`/`.mcp.json`/PDF do enunciado fora do histórico (`git log --all -- .env` vazio). | Achados críticos corrigidos ou documentados; varredura de segredos no histórico sem achados | 1.16 | cc:TODO |
 | 3.2 | `[lane:release]` `[tdd:skip:release-automation]` `@claude` **Publicar**: repositório e GitHub Project públicos antes do prazo de 2026-11-02 23:59; depois disso, nada muda no repositório. | `gh repo view --json visibility` = PUBLIC; Project público; URL registrada | 3.1 | cc:TODO |
 
 ## Reject (fora do plano, com motivo)
@@ -144,3 +172,6 @@ Destino: `docs/arquitetura.md` e `docs/premissas.md`.
 - 事項: destructive — `docker compose down -v` (volumes locais de Postgres/Redis) e remoção da pasta temporária do clone limpo
   理由: reiniciar o smoke do zero; limpar a verificação
   scope: Phase 1 / Task 1.16, Phase 2 / Task 2.8
+- 事項: external-send — baixar e instalar a skill archify (`npx skills ...` / clone de `github.com/tt-a1i/archify`) — **PENDENTE de aprovação**
+  理由: gerar os diagramas da task 3.0; código de terceiros executado localmente (cadeia de suprimentos), por isso o instalador é lido antes
+  scope: Phase 3 / Task 3.0
