@@ -123,6 +123,8 @@ name = "C1d - adaptadores nao importam composicao"
 type = "forbidden"
 source_modules = ["emporio.adaptadores"]
 forbidden_modules = ["emporio.composicao"]
+# Exceção única: o adaptador de entrada recebe o motor pela composição (C4, arquitetura §3.3).
+ignore_imports = ["emporio.adaptadores.cli -> emporio.composicao"]
 
 # --- C2: sem SDKs/frameworks externos em modulos e portas -----------------
 [[tool.importlinter.contracts]]
@@ -231,3 +233,5 @@ modules = [
     "emporio.adaptadores.memoria",
     "emporio.adaptadores.relogio",
 ]
+# A CLI chega aos outros adaptadores só através da composição (C4); essa é a única aresta permitida.
+ignore_imports = ["emporio.adaptadores.cli -> emporio.composicao"]

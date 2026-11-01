@@ -16,6 +16,7 @@ from typing import Final
 from pydantic import ValidationError
 
 from emporio.adaptadores.csv import CatalogoCsv, ClientesCsv, PedidosCsv, SolicitacoesJsonl
+from emporio.adaptadores.csv._leitura import ler_pedidos, ler_produtos
 from emporio.adaptadores.llm import criar_provedores
 from emporio.adaptadores.memoria import CircuitoStoreMemoria, RateLimiterMemoria, SessaoStoreMemoria
 from emporio.adaptadores.motor.nativo import AgenteNativo
@@ -28,7 +29,7 @@ from emporio.modulos.catalogo.aplicacao import ServicoCatalogo
 from emporio.modulos.comercial.aplicacao import ServicoComercial
 from emporio.modulos.pedidos.aplicacao import ServicoPedidos
 from emporio.modulos.politicas.aplicacao import ServicoPoliticas
-from emporio.portas import LLMProvider, MotorDeAtendimento, Relogio
+from emporio.portas import DiagnosticoInfo, LLMProvider, MotorDeAtendimento, Relogio, TenantContext
 from emporio.portas.tenant import ConfigTenant
 
 MOTORES_DISPONIVEIS: Final = ("nativo",)
@@ -37,6 +38,21 @@ MOTORES_FASE_2: Final = ("n8n",)
 """Valores previstos, ainda não implementados."""
 
 _VARIAVEIS_CHAVE: Final = "GROQ_API_KEY, GOOGLE_API_KEY ou ANTHROPIC_API_KEY"
+
+__all__ = [
+    "MOTORES_DISPONIVEIS",
+    "MOTORES_FASE_2",
+    "Aplicacao",
+    "DiagnosticoDetalhado",
+    "DiagnosticoLocal",
+    "ErroConfiguracao",
+    "ErroSemChaveLLM",
+    "Settings",
+    "carregar_settings",
+    "montar",
+    "montar_diagnostico",
+    "montar_ferramentas",
+]
 
 
 class ErroSemChaveLLM(ErroConfiguracao):
@@ -165,3 +181,98 @@ def montar_ferramentas(
 def _resolver(base: Path, caminho: Path | str) -> Path:
     caminho = Path(caminho)
     return caminho if caminho.is_absolute() else base / caminho
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticoDetalhado(DiagnosticoInfo):
+    """`DiagnosticoInfo` com os detalhes que a CLI mostra (a porta traz só o núcleo). Sem segredos."""
+
+    tenant_valido: bool = False
+    n_produtos: int | None = None
+    n_pedidos: int | None = None
+    manual_encontrado: bool = False
+
+
+class DiagnosticoLocal:
+    """Implementa a porta `Diagnostico` sem exigir provedor de LLM nem montar o motor.
+
+    Decisão: caminho separado (`montar_diagnostico`) em vez de tornar `Aplicacao.motor` opcional, para a API da
+    `montar()` seguir garantindo motor funcional (sem `None` para os adapters de entrada tratarem) e para o
+    diagnóstico funcionar justamente quando falta configuração (sem chave, tenant inválido). Nunca lança: problemas
+    viram `avisos`.
+    """
+
+    def __init__(
+        self, settings: Settings, *, provedores: tuple[str, ...] | None = None, raiz: Path | None = None
+    ) -> None:
+        self._settings = settings
+        self._provedores = provedores
+        self._raiz = raiz if raiz is not None else Path.cwd()
+        self.tenant_padrao = settings.tenant_padrao
+
+    async def diagnosticar(self, ctx: TenantContext) -> DiagnosticoDetalhado:
+        """Verifica provedores, motor, tenant, dados e manual de políticas; devolve também os avisos."""
+        s = self._settings
+        avisos: list[str] = []
+        provedores = self._provedores if self._provedores is not None else s.provedores_com_chave()
+        if not provedores:
+            avisos.append(
+                f"Nenhuma chave de LLM configurada. Defina ao menos uma das variáveis {_VARIAVEIS_CHAVE} "
+                "no arquivo de ambiente do projeto (copie o exemplo da raiz) ou no ambiente do shell."
+            )
+        if s.motor_atendimento not in MOTORES_DISPONIVEIS:
+            avisos.append(_mensagem_motor(s.motor_atendimento))
+
+        tenant_valido = False
+        n_produtos: int | None = None
+        n_pedidos: int | None = None
+        manual = False
+        try:
+            tenants = carregar_tenants(_resolver(self._raiz, s.tenants_config))
+            config = tenants.get(ctx.tenant_id)
+            if config is None:
+                avisos.append(f"Tenant '{ctx.tenant_id}' não existe. Disponíveis: {', '.join(sorted(tenants))}.")
+            else:
+                tenant_valido = True
+                manual = self._manual_existe(config.politicas_arquivo, avisos)
+                n_produtos, n_pedidos = self._contar_dados(config.dados_dir, avisos)
+        except ErroConfiguracao as exc:
+            avisos.append(str(exc))
+        if s.data_referencia is None:
+            avisos.append("DATA_REFERENCIA não definida: o agente usa a data real (pedidos do CSV vão até 2026-03).")
+
+        return DiagnosticoDetalhado(
+            provedores_com_chave=tuple(provedores),
+            motor_ativo=s.motor_atendimento,
+            tenant_id=ctx.tenant_id,
+            dados_carregados=n_produtos is not None and n_pedidos is not None,
+            data_referencia=s.data_referencia,
+            avisos=tuple(avisos),
+            tenant_valido=tenant_valido,
+            n_produtos=n_produtos,
+            n_pedidos=n_pedidos,
+            manual_encontrado=manual,
+        )
+
+    def _manual_existe(self, arquivo: str, avisos: list[str]) -> bool:
+        try:
+            carregar_politicas(_resolver(self._raiz, arquivo))
+        except ErroConfiguracao as exc:
+            avisos.append(str(exc))
+            return False
+        return True
+
+    def _contar_dados(self, dados_dir: str, avisos: list[str]) -> tuple[int | None, int | None]:
+        try:
+            pasta = _resolver(self._raiz, dados_dir)
+            return len(ler_produtos(pasta)), len(ler_pedidos(pasta))
+        except Exception as exc:
+            avisos.append(f"Não foi possível carregar os dados em '{dados_dir}': {exc}")
+            return None, None
+
+
+def montar_diagnostico(
+    settings: Settings, *, provedores: tuple[str, ...] | None = None, raiz: Path | None = None
+) -> DiagnosticoLocal:
+    """Diagnóstico que funciona sem nenhum provedor de LLM. `provedores` injeta nomes (testes)."""
+    return DiagnosticoLocal(settings, provedores=provedores, raiz=raiz)
