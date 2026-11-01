@@ -103,6 +103,7 @@ def _agente(
     sessoes: SessaoStoreMemoria | None = None,
     tenants: dict[str, ConfigTenant] | None = None,
     segredo: str | None = SEGREDO_WEBHOOK,
+    max_historico: int | None = None,
 ) -> AgenteN8n:
     tenants = tenants or _tenants()
 
@@ -122,6 +123,7 @@ def _agente(
         limitador=RateLimiterMemoria(tenants),
         relogio=RelogioFixo(DATA_REFERENCIA),
         sleep=sem_espera,
+        **({} if max_historico is None else {"max_mensagens_historico": max_historico}),
     )
 
 
@@ -156,7 +158,7 @@ async def test_corpo_do_webhook_segue_o_contrato_e_token_e_do_tenant() -> None:
     assert corpo["tools"]["url_base"] == "http://api.teste/v1/tools"
     assert 0 < corpo["prazo_s"] <= _tenants()["emporio"].deadline_mensagem_s
     identidade = JwtLocal(SecretStr(SEGREDO_JWT)).validar(corpo["tools"]["token"])
-    assert identidade.tenant_id == "emporio" and identidade.papeis == frozenset({Papel.ATENDENTE})
+    assert identidade.tenant_id == "emporio" and identidade.papeis == frozenset({Papel.SERVICO_TOOLS})
 
     # I2: o histórico vai do Python para o workflow (stateless).
     assert webhook.corpos()[1]["historico"] == [
@@ -349,3 +351,20 @@ def test_construtor_valida_parametros(tmp_path: Path) -> None:
             relogio=RelogioFixo(DATA_REFERENCIA),
             tentativas=0,
         )
+
+
+async def test_ids_sinteticos_de_tool_nao_colidem_com_o_historico_no_teto() -> None:
+    sessoes = SessaoStoreMemoria()
+    tool = {"nome": "detalhar_produto", "argumentos": {"nome": "Takamine GD20"}, "resultado": RESULTADO_TOOL}
+    webhook = Webhook(*(ok(f"Sai por {PRECO}.", [tool]) for _ in range(4)))
+    agente = _agente(webhook, sessoes=sessoes, max_historico=8)  # 2 turnos com tool (4 mensagens cada)
+
+    for _ in range(4):
+        assert not (await _perguntar(agente)).degradada
+
+    estado = await sessoes.obter(CTX, "s1")
+    assert estado is not None and len(estado.historico) == 8
+    ids = [c.id for m in estado.historico for c in m.tool_calls]
+    assert len(ids) == 2 and len(set(ids)) == 2
+    ids_resultado = [m.tool_call_id for m in estado.historico if m.role is PapelMensagem.TOOL]
+    assert sorted(ids_resultado) == sorted(ids)

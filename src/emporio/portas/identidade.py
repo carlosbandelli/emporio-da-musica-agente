@@ -48,15 +48,16 @@ PERMISSOES_POR_PAPEL: Final[Mapping[Papel, frozenset[Permissao]]] = MappingProxy
         Papel.ATENDENTE: _ATENDENTE,
         Papel.GERENTE: _ATENDENTE | {Permissao.CONFIG_EDITAR},
         Papel.ADMIN_PLATAFORMA: frozenset({Permissao.TENANTS_CRIAR, Permissao.METRICAS_LER}),
+        Papel.SERVICO_TOOLS: frozenset({Permissao.TOOLS_USAR}),
     }
 )
-"""Matriz da §8. `gerente` = tudo do `atendente` + `config:editar`. `tools:usar` fica com a equipe da loja (a
-credencial de serviço do n8n é um token de `atendente` do tenant)."""
+"""Matriz da §8. `gerente` = tudo do `atendente` + `config:editar`. `tools:usar` fica com a equipe da loja e
+com `servico_tools`, a credencial de máquina do n8n (só `tools:usar`, sem acesso a solicitações com dados pessoais)."""
 
 PERMISSOES_DE_PLATAFORMA: Final = frozenset({Permissao.TENANTS_CRIAR, Permissao.METRICAS_LER})
 """Permissões que não são de um tenant: dispensam a checagem `tenant do token == tenant da requisição`."""
 
-PAPEIS_DE_TENANT: Final = (Papel.CLIENTE, Papel.ATENDENTE, Papel.GERENTE)
+PAPEIS_DE_TENANT: Final = (Papel.SERVICO_TOOLS, Papel.CLIENTE, Papel.ATENDENTE, Papel.GERENTE)
 """Papéis de quem atua dentro de uma loja, do menor para o maior privilégio."""
 
 

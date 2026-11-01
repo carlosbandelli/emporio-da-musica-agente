@@ -113,12 +113,15 @@ ENDPOINTS: Final = {
     "ler_config": ("GET", "/v1/admin/config", None),
     "editar_config": ("PUT", "/v1/admin/config", {"deadline_mensagem_s": 25}),
     "chat": ("POST", "/v1/chat", CORPO_CHAT),
+    "tools_listar": ("GET", "/v1/tools", None),
+    "tools_executar": ("POST", "/v1/tools/status_loja", {}),
 }
 PERMITIDOS: Final = {
     Papel.CLIENTE: {"chat"},
-    Papel.ATENDENTE: {"chat", "listar", "mudar_status"},
-    Papel.GERENTE: {"chat", "listar", "mudar_status", "ler_config", "editar_config"},
+    Papel.ATENDENTE: {"chat", "listar", "mudar_status", "tools_listar", "tools_executar"},
+    Papel.GERENTE: {"chat", "listar", "mudar_status", "ler_config", "editar_config", "tools_listar", "tools_executar"},
     Papel.ADMIN_PLATAFORMA: set(),
+    Papel.SERVICO_TOOLS: {"tools_listar", "tools_executar"},
 }
 
 

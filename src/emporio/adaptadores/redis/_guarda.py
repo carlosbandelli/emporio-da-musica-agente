@@ -34,6 +34,10 @@ class GuardaRedis:
         self._agora = fonte_tempo
         self._pausado_ate = 0.0
 
+    def agora(self) -> float:
+        """Instante atual na fonte de tempo da guarda (monotônico)."""
+        return self._agora()
+
     @property
     def em_pausa(self) -> bool:
         """True enquanto o Redis está sendo ignorado após uma falha."""

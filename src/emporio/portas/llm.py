@@ -65,7 +65,12 @@ class DefinicaoTool:
 
 @dataclass(frozen=True, slots=True)
 class UsoTokens:
-    """Consumo de tokens de uma chamada."""
+    """Consumo de tokens de uma chamada.
+
+    Os campos são disjuntos em todos os provedores: `entrada` conta só os tokens de entrada **não** cacheados
+    (os adapters de Gemini e Groq subtraem `cache_leitura` do total de prompt que a API informa); `cache_leitura`
+    são os tokens lidos do cache e `saida` os gerados. Total de prompt = `entrada + cache_leitura`.
+    """
 
     entrada: int = 0
     saida: int = 0

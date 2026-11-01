@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import httpx
+import pytest
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 from prometheus_client.parser import text_string_to_metric_families
@@ -123,3 +124,18 @@ async def test_roteador_emite_classificacao_fallback_tokens_e_falha() -> None:
     assert 'emporio_llm_fallback_total{de="gemini",para="groq",tenant_id="emporio"} 1.0' in texto
     assert 'emporio_prompt_cache_total{provedor="groq",resultado="hit",tenant_id="emporio"} 1.0' in texto
     assert 'emporio_llm_tokens_total{provedor="groq",tenant_id="emporio",tipo="entrada"} 100.0' in texto
+
+
+def test_custo_gemini_cobra_entrada_nao_cacheada_e_cache_sem_dupla_contagem() -> None:
+    t = TelemetriaReal()
+    # 7000 de prompt com 6000 em cache: o adapter entrega entrada=1000 (não cacheada) e cache_leitura=6000
+    t.llm_chamada(
+        "emporio", "gemini", "complexo", "ok", duracao_s=1.0, uso=UsoTokens(entrada=1000, saida=0, cache_leitura=6000)
+    )
+    valor = next(
+        a.value
+        for f in text_string_to_metric_families(t.exportar_metricas()[0].decode())
+        for a in f.samples
+        if a.name == "emporio_llm_custo_usd_total"
+    )
+    assert valor == pytest.approx((1000 * 0.30 + 6000 * 0.03) / 1_000_000)

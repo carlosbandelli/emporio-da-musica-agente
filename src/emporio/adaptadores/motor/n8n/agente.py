@@ -13,8 +13,9 @@ O n8n decide "quem chama o quê" (LLM e tools); as regras de negócio continuam 
 8. guarda de valores (I6) sobre os resultados de tools que o workflow devolve, com uma rodada corretiva;
 9. grava o turno (append-only) no formato do nativo, então trocar de motor não perde a conversa.
 
-Credencial das tools: a cada turno o motor emite um JWT de `atendente` só do tenant do turno, válido pelo deadline
-mais uma margem (`ProvedorIdentidade.emitir`); o workflow o repassa em `Authorization` ao chamar `/v1/tools/*` (I3).
+Credencial das tools: a cada turno o motor emite um JWT de `servico_tools` (só `tools:usar`) do tenant do turno,
+válido pelo deadline mais uma margem (`ProvedorIdentidade.emitir`); o workflow o repassa em `Authorization`
+ao chamar `/v1/tools/*` (I3).
 
 Nunca lança (I4): toda falha vira mensagem fixa traduzida com `degradada=True` e `codigo`. Sem estado global (I8).
 """
@@ -28,6 +29,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final
+from uuid import uuid4
 
 import httpx
 from pydantic import ValidationError
@@ -245,7 +247,7 @@ class AgenteN8n:
             falha = ChaveMensagem.ERRO
         else:
             if desfecho.texto is not None:
-                tools = _mensagens_de_tools(turno.chamadas, prefixo=f"{PREFIXO_ID_TOOL}{len(estado.historico)}-")
+                tools = _mensagens_de_tools(turno.chamadas, prefixo=f"{PREFIXO_ID_TOOL}{uuid4().hex[:12]}-")
                 novas = (MensagemLLM(PapelMensagem.USER, texto), *tools)
                 historico = (*estado.historico, *novas, MensagemLLM(PapelMensagem.ASSISTANT, desfecho.texto))
                 await self._gravar(ctx, sessao_id, historico, idioma_sessao)
@@ -280,7 +282,7 @@ class AgenteN8n:
         token = self._identidade.emitir(
             sub=SUB_SERVICO,
             tenant_id=ctx.tenant_id,
-            papeis=(Papel.ATENDENTE,),
+            papeis=(Papel.SERVICO_TOOLS,),
             validade_s=math.ceil(config.deadline_mensagem_s) + MARGEM_TOKEN_S,
         )
         conversa = _conversa(estado.historico)

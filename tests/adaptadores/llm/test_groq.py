@@ -112,7 +112,7 @@ async def test_tool_calls_e_uso() -> None:
     resp = await provedor(Servidor(httpx.Response(200, json=resposta))).gerar(requisicao(tools=TOOLS))
     assert resp.texto is None
     assert resp.chamadas_tool == (ChamadaTool("call_1", "buscar_produtos", {"q": "violão"}),)
-    assert resp.uso == UsoTokens(entrada=12, saida=4, cache_leitura=8)
+    assert resp.uso == UsoTokens(entrada=4, saida=4, cache_leitura=8)  # entrada = prompt 12 - cache 8
 
 
 async def test_argumentos_vazios_viram_dict_vazio() -> None:

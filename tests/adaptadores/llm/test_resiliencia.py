@@ -252,3 +252,35 @@ async def test_sem_credito_abre_circuito_na_hora_sem_retry(tempo: Tempo, sono: S
         await provedor.gerar(requisicao())
     tempo.t += 400  # abertura permanente: 10 min; depois 1 sonda
     assert (await provedor.gerar(requisicao())).texto == "voltou"
+
+
+class _FalhaTardia:
+    """Chamada iniciada antes da abertura: abre o circuito, o tempo passa e só então ela falha."""
+
+    nome = "groq"
+
+    def __init__(self, circuito: CircuitoStoreMemoria, tempo: Tempo) -> None:
+        self._circuito = circuito
+        self._tempo = tempo
+        self.chamadas = 0
+
+    async def gerar(self, req: RequisicaoLLM) -> RespostaLLM:
+        self.chamadas += 1
+        if self.chamadas == 1:
+            await self._circuito.registrar_falha(self.nome, permanente=True)  # outra chamada abriu o circuito
+            self._tempo.t += 700  # passa o tempo de abertura (<= 600 s com jitter)
+            raise ErroLLMTransitorio("503 tardio")
+        return RespostaLLM("sonda ok", self.nome, "m")
+
+
+async def test_telemetria_apos_falha_nao_reserva_a_sonda(tempo: Tempo, sono: SonoFalso) -> None:
+    circuito = CircuitoStoreMemoria(fonte_tempo=tempo)
+    interno = _FalhaTardia(circuito, tempo)
+    provedor = ProvedorResiliente(
+        interno, circuito, PoliticaResiliencia(max_concorrentes=2, tentativas=1), sleep=sono, relogio_monotonic=tempo
+    )
+    with pytest.raises(ErroLLMTransitorio):
+        await provedor.gerar(requisicao())
+    # a falha tardia não pode ter consumido a única sonda: a próxima chamada real a recebe
+    assert (await provedor.gerar(requisicao())).texto == "sonda ok"
+    assert await circuito.estado("groq") is EstadoCircuito.FECHADO

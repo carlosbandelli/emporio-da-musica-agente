@@ -74,6 +74,7 @@ class ProvedorResiliente:
         self._circuito = circuito
         self._sleep = sleep
         self._agora = relogio_monotonic
+        self._ultimo_estado = EstadoCircuito.FECHADO  # último estado conhecido, só para telemetria
         self._bulkhead = asyncio.Semaphore(politica.max_concorrentes)
         self._espera_base = wait_random_exponential(multiplier=politica.espera_multiplicador, max=politica.espera_max_s)
 
@@ -121,6 +122,7 @@ class ProvedorResiliente:
         if restante is not None and restante <= 0:
             raise ErroPrazoEsgotado(f"{nome}: prazo esgotado antes da chamada")
         estado = await self._circuito.estado(nome)
+        self._ultimo_estado = estado
         self._telemetria.circuito_estado(nome, estado)
         if estado is EstadoCircuito.ABERTO:
             raise ErroCircuitoAberto(f"{nome}: circuito aberto")
@@ -159,9 +161,14 @@ class ProvedorResiliente:
 
     async def _sucesso(self, nome: str) -> None:
         await self._circuito.registrar_sucesso(nome)
+        self._ultimo_estado = EstadoCircuito.FECHADO
         self._telemetria.circuito_estado(nome, EstadoCircuito.FECHADO)
 
     async def _falha(self, nome: str, *, permanente: bool) -> None:
         await self._circuito.registrar_falha(nome, permanente=permanente)
-        # Logo após registrar a falha o circuito está fechado ou aberto (não expira ainda): ler não reserva sonda.
-        self._telemetria.circuito_estado(nome, await self._circuito.estado(nome))
+        # Nunca chamar `estado()` aqui: se o tempo de abertura já venceu (falha tardia de chamada iniciada antes),
+        # a leitura transitaria para meio-aberto e reservaria a única sonda sem enviá-la. Falha permanente abre
+        # o circuito na hora; senão vale o último estado visto (a próxima consulta real atualiza).
+        if permanente:
+            self._ultimo_estado = EstadoCircuito.ABERTO
+        self._telemetria.circuito_estado(nome, self._ultimo_estado)

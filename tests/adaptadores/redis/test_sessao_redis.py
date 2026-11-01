@@ -131,3 +131,55 @@ async def test_pausa_evita_nova_espera_e_retoma(fake: Redis) -> None:
     assert await store.obter(A, "s1") is None  # em pausa: nem tenta (degradada)
     tempo.t += 5
     assert await store.obter(A, "s1") == EstadoSessao(idioma=Idioma.PT_BR)  # sonda após a pausa
+
+
+class _Intermitente:
+    """Cliente que falha só na leitura enquanto `falhar` for True; o resto vai ao Redis fake."""
+
+    def __init__(self, real: Redis) -> None:
+        self.real = real
+        self.falhar = True
+
+    async def get(self, chave: str) -> bytes | None:
+        if self.falhar:
+            raise ConnectionError("queda curta")
+        return await self.real.get(chave)
+
+    async def set(self, chave: str, valor: str, ex: int) -> object:
+        return await self.real.set(chave, valor, ex=ex)
+
+
+async def test_leitura_degradada_nao_deixa_o_salvar_seguinte_apagar_o_historico(
+    fake: Redis, caplog: pytest.LogCaptureFixture
+) -> None:
+    tempo = Tempo()
+    cliente = _Intermitente(fake)
+    store = SessaoStoreRedis(cliente, GuardaRedis(pausa_s=5, fonte_tempo=tempo))  # type: ignore[arg-type]
+    original = _historico_complexo()
+    await fake.set(chave_sessao("emporio", "s1"), serializar_estado(original))
+
+    assert await store.obter(A, "s1") is None  # queda: o motor começa do zero
+    cliente.falhar = False
+    tempo.t += 5  # a pausa acaba
+    novo = EstadoSessao(historico=(MensagemLLM(PapelMensagem.USER, "só o turno novo"),))
+    with caplog.at_level(logging.WARNING):
+        await store.salvar(A, "s1", novo, ttl_s=60)  # no-op: não pode sobrescrever o histórico real
+    assert "degradada" in caplog.text
+    assert await store.obter(A, "s1") == original
+
+    await store.salvar(A, "s1", novo, ttl_s=60)  # leitura saudável limpou a marca: salvar volta ao normal
+    assert await store.obter(A, "s1") == novo
+
+
+async def test_sessao_inexistente_nao_marca_degradacao(fake: Redis) -> None:
+    store = SessaoStoreRedis(fake)
+    assert await store.obter(A, "nova") is None
+    await store.salvar(A, "nova", EstadoSessao(idioma=Idioma.EN_US), ttl_s=60)
+    assert await store.obter(A, "nova") == EstadoSessao(idioma=Idioma.EN_US)
+
+
+async def test_marcas_de_leitura_degradada_sao_limitadas() -> None:
+    store = SessaoStoreRedis(_Quebrado(), GuardaRedis(pausa_s=0), max_marcas=3)  # type: ignore[arg-type]
+    for i in range(10):
+        await store.obter(A, f"s{i}")
+    assert store.total_marcas <= 3

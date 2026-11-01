@@ -27,6 +27,7 @@ MATRIZ_ESPERADA = {
     Papel.ATENDENTE: {P.CHAT_USAR, P.SOLICITACOES_LER, P.SOLICITACOES_RESOLVER, P.TOOLS_USAR},
     Papel.GERENTE: {P.CHAT_USAR, P.SOLICITACOES_LER, P.SOLICITACOES_RESOLVER, P.TOOLS_USAR, P.CONFIG_EDITAR},
     Papel.ADMIN_PLATAFORMA: {P.TENANTS_CRIAR, P.METRICAS_LER},
+    Papel.SERVICO_TOOLS: {P.TOOLS_USAR},
 }
 
 
@@ -34,7 +35,7 @@ def _id(*papeis: Papel, tenant: str = "emporio") -> Identidade:
     return Identidade(sub="u1", tenant_id=tenant, papeis=frozenset(papeis))
 
 
-def test_matriz_cobre_os_quatro_papeis_e_e_a_da_arquitetura() -> None:
+def test_matriz_cobre_os_cinco_papeis_e_e_a_da_arquitetura() -> None:
     assert set(PERMISSOES_POR_PAPEL) == set(Papel)
     assert {papel: set(ps) for papel, ps in PERMISSOES_POR_PAPEL.items()} == MATRIZ_ESPERADA
 
@@ -69,6 +70,12 @@ def test_admin_plataforma_nao_le_solicitacoes_de_loja_nem_em_outro_tenant() -> N
     assert autorizar(_id(Papel.ADMIN_PLATAFORMA, tenant="x"), P.CONFIG_EDITAR, "emporio") is Decisao.SEM_PERMISSAO
 
 
+def test_servico_tools_so_tem_tools_usar_e_nenhum_dado_pessoal() -> None:
+    assert permissoes([Papel.SERVICO_TOOLS]) == {P.TOOLS_USAR}
+    assert autorizar(_id(Papel.SERVICO_TOOLS), P.SOLICITACOES_LER, "emporio") is Decisao.SEM_PERMISSAO
+    assert autorizar(_id(Papel.SERVICO_TOOLS, tenant="x"), P.TOOLS_USAR, "emporio") is Decisao.TENANT_DIVERGENTE
+
+
 def test_sem_identidade_nao_autenticado() -> None:
     assert autorizar(None, P.CHAT_USAR, "emporio") is Decisao.NAO_AUTENTICADO
 
@@ -85,6 +92,7 @@ def test_varios_papeis_somam_permissoes() -> None:
         ((Papel.ATENDENTE, Papel.GERENTE), Papel.GERENTE),
         ((Papel.ADMIN_PLATAFORMA,), Papel.CLIENTE),
         ((Papel.ADMIN_PLATAFORMA, Papel.ATENDENTE), Papel.ATENDENTE),
+        ((Papel.SERVICO_TOOLS,), Papel.SERVICO_TOOLS),
     ],
 )
 def test_papel_no_tenant(papeis: tuple[Papel, ...], esperado: Papel) -> None:

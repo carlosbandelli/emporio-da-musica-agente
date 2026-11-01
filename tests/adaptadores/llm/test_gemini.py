@@ -88,7 +88,14 @@ async def test_requisicao_tools_e_system() -> None:
     assert declaracao["parameters_json_schema"] == dict(TOOLS[0].parametros)
     assert corpo["generationConfig"]["maxOutputTokens"] >= 8192
     assert (resp.texto, resp.provedor, resp.modelo) == ("Oi!", "gemini", "gemini-3-flash")
-    assert resp.uso == UsoTokens(entrada=20, saida=9, cache_leitura=11)
+    assert resp.uso == UsoTokens(entrada=9, saida=9, cache_leitura=11)  # entrada = prompt 20 - cache 11
+
+
+async def test_entrada_exclui_tokens_em_cache() -> None:
+    corpo = resposta([{"text": "Oi!"}])
+    corpo["usageMetadata"].update(promptTokenCount=7000, cachedContentTokenCount=6000)
+    resp = await provedor(Servidor(httpx.Response(200, json=corpo))).gerar(requisicao())
+    assert (resp.uso.entrada, resp.uso.cache_leitura) == (1000, 6000)
 
 
 async def test_config_desliga_afc_e_repassa_timeout(monkeypatch: pytest.MonkeyPatch) -> None:

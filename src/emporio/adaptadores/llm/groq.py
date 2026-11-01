@@ -99,7 +99,7 @@ class ProvedorGroq:
             modelo=completion.model,
             chamadas_tool=chamadas,
             uso=UsoTokens(
-                entrada=uso.prompt_tokens if uso else 0,
+                entrada=max(uso.prompt_tokens - cache, 0) if uso else 0,  # sem os tokens em cache
                 saida=uso.completion_tokens if uso else 0,
                 cache_leitura=cache,
             ),

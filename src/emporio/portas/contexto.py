@@ -12,12 +12,13 @@ class Idioma(StrEnum):
 
 
 class Papel(StrEnum):
-    """Papéis de RBAC (arquitetura §8)."""
+    """Papéis de RBAC (arquitetura §8). `servico_tools` é a credencial de máquina do n8n: só `tools:usar`."""
 
     CLIENTE = "cliente"
     ATENDENTE = "atendente"
     GERENTE = "gerente"
     ADMIN_PLATAFORMA = "admin_plataforma"
+    SERVICO_TOOLS = "servico_tools"
 
 
 @dataclass(frozen=True, slots=True)

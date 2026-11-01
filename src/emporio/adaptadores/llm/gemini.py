@@ -189,15 +189,16 @@ class ProvedorGemini:
         )
         blocos = tuple(p.model_dump(mode="json", exclude_none=True) for p in partes)
         uso = resposta.usage_metadata
+        cache = (uso.cached_content_token_count or 0) if uso else 0
         return RespostaLLM(
             texto="".join(textos) or None,
             provedor=self._nome,
             modelo=resposta.model_version or self.modelo,
             chamadas_tool=chamadas,
             uso=UsoTokens(
-                entrada=(uso.prompt_token_count or 0) if uso else 0,
+                entrada=max((uso.prompt_token_count or 0) - cache, 0) if uso else 0,  # sem os tokens em cache
                 saida=((uso.candidates_token_count or 0) + (uso.thoughts_token_count or 0)) if uso else 0,
-                cache_leitura=(uso.cached_content_token_count or 0) if uso else 0,
+                cache_leitura=cache,
             ),
             bruto=ConteudoBruto(self._nome, blocos) if blocos else None,
         )
