@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     modelo_groq: str = "openai/gpt-oss-120b"
     # `reasoning_effort` do Groq; só modelos que raciocinam aceitam (gpt-oss, qwen3). `None` = não envia.
     esforco_groq: Literal["low", "medium", "high"] | None = "low"
+    # Fase 2 (docs/deploy.md). Ausentes = modo local (CSV e memória). URLs podem conter senha: SecretStr.
+    database_url: SecretStr | None = None
+    redis_url: SecretStr | None = None
+    sentry_dsn: SecretStr | None = None
+    otel_exporter_otlp_endpoint: str | None = None
+    jwt_secret: SecretStr | None = None
 
     def provedores_com_chave(self) -> tuple[str, ...]:
         """Nomes dos provedores de LLM com chave configurada (nunca os valores)."""
